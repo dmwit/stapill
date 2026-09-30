@@ -1,11 +1,14 @@
 # Reinforcement Learning TODO
 
 Build a Gymnasium environment for training a Stable-Baselines3-compatible agent
-to play Dr. Mario using the pure Haskell model in `maryodel/haskell`.
+to play Dr. Mario using a Haskell simulator based on `maryodel/haskell`.
+The Haskell simulator is the authoritative game-transition engine; Python
+handles the Gymnasium and Stable-Baselines3 integration.
 
 ## First milestone
 
-- [ ] Add a persistent single-player game simulator around the existing Haskell model.
+- [ ] Add a persistent single-player Haskell simulator around the existing model.
+- [ ] Define a stable machine-readable request/response interface between Python and the Haskell simulator.
 - [ ] Use a fixed starting level initially.
 - [ ] Generate seeded boards and pill sequences with the existing NES-compatible RNG.
 - [ ] Advance one environment step per pill placement, including placement, cleanup, gravity, and generation of the next pill.
@@ -46,7 +49,7 @@ term, not frame-based discounting.
 
 ## Python/SB3 integration
 
-- [ ] Add a Python package/environment implementing the Gymnasium `reset` and `step` APIs.
+- [ ] Add a Python package/environment implementing the Gymnasium `reset` and `step` APIs through the Haskell simulator interface.
 - [ ] Implement deterministic `reset(seed=...)` behavior.
 - [ ] Add `action_masks()` for `MaskablePPO` and vectorized environments.
 - [ ] Implement `render()` or a board-debugging representation.
@@ -56,7 +59,8 @@ term, not frame-based discounting.
 
 ## Verification
 
-- [ ] Test board transitions against known Haskell model examples.
+- [ ] Test the Haskell simulator's transition contract with deterministic fixtures.
+- [ ] Test Python/Haskell request and response serialization, including errors and episode termination.
 - [ ] Test all action encodings and legal-action masks.
 - [ ] Test invalid-action replacement and seeded reproducibility.
 - [ ] Test win, loss, cleanup, gravity, and episode truncation behavior.
