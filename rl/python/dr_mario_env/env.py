@@ -35,7 +35,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         self.render_mode = render_mode
         self.action_space = spaces.Discrete(8 * 16 * 4)
         self.observation_space = spaces.Box(
-            low=0.0, high=255.0, shape=(133,), dtype=np.float32
+            low=0.0, high=1.0, shape=(1160,), dtype=np.float32
         )
         self._simulator_command = simulator_command
         self._simulator: SimulatorClient | None = None
@@ -50,7 +50,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
     @staticmethod
     def _observation(response: dict[str, Any]) -> np.ndarray:
         observation = np.asarray(response["observation"], dtype=np.float32)
-        if observation.shape != (133,):
+        if observation.shape != (1160,):
             raise ValueError(f"unexpected observation shape: {observation.shape}")
         return observation
 
@@ -96,9 +96,17 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
     def render(self) -> str:
         if self._last_response is None:
             return "<not reset>"
-        board = self._last_response["observation"][:128]
-        rows = [board[offset : offset + 8] for offset in range(0, 128, 8)]
-        rendered = "\n".join(" ".join(f"{cell:02d}" for cell in row) for row in rows)
+        values = self._last_response["observation"]
+        rows = []
+        for row in range(16):
+            cells = []
+            for column in range(8):
+                offset = (row * 8 + column) * 9
+                color = int(np.argmax(values[offset : offset + 4]))
+                shape = int(np.argmax(values[offset + 4 : offset + 9]))
+                cells.append("." if color == 3 else f"{color}/{shape}")
+            rows.append(" ".join(cells))
+        rendered = "\n".join(rows)
         if self.render_mode == "ansi":
             return rendered
         print(rendered)

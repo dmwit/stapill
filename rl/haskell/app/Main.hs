@@ -54,7 +54,7 @@ data Action = Action
 
 data Reply = Reply
   { replyType :: !String
-  , replyObservation :: ![Int]
+  , replyObservation :: ![Double]
   , replyMask :: ![Bool]
   , replyReward :: !Double
   , replyTerminated :: !Bool
@@ -136,6 +136,8 @@ stateReply kind state reward terminated truncated extra = Reply
         , "viruses" .= countViruses (simBoard state)
         , "frames" .= simFrames state
         , "locked_pills" .= simLockedPills state
+        , "gravity_frames_per_row" .= gravityFrames state
+        , "gravity_rows_per_frame" .= (1 / fromIntegral (gravityFrames state) :: Double)
         ] ++ map (\(key, value) -> Key.fromString key .= value) extra
       )
   }
@@ -216,9 +218,12 @@ legalActions state = mapMaybe (toAction lookahead) (HM.toList reachable)
       pure Action
         { actionIndex = index
         , actionPill = candidate
-        , actionFrames = 1 + abs (xDelta move) + abs (yDelta move)
+        , actionFrames = 1 + abs (xDelta move) + abs (yDelta move) * gravityFrames state
                        + maybe 0 (const 1) (finalRotation move)
         }
+
+gravityFrames :: SimState -> Int
+gravityFrames state = gravity Low (simLockedPills state)
 
 currentLookahead :: SimState -> Lookahead
 currentLookahead state =
@@ -237,25 +242,36 @@ encodeAction lookahead content position = do
     _ -> Nothing
   pure (config * 128 + y position * 8 + x position)
 
-observation :: SimState -> [Int]
+observation :: SimState -> [Double]
 observation state = boardValues (simBoard state)
-  ++ [colorCode (leftColor lookahead), colorCode (rightColor lookahead)]
-  ++ [simLevel state, countViruses (simBoard state), simLockedPills state]
+  ++ oneHot 3 (fromEnum (leftColor lookahead))
+  ++ oneHot 3 (fromEnum (rightColor lookahead))
+  ++ [fromIntegral frames / 40, 1 / fromIntegral frames]
   where
     lookahead = currentLookahead state
+    frames = gravityFrames state
 
-boardValues :: Board -> [Int]
+boardValues :: Board -> [Double]
 boardValues board =
-  [ cellCode (unsafeGet board (Position x y))
+  concat [cellEncoding (unsafeGet board (Position x y))
   | y <- [15,14..0], x <- [0..7]
   ]
 
-cellCode :: Cell -> Int
-cellCode Empty = 0
-cellCode (Occupied color shape) = 1 + fromEnum color * 6 + fromEnum shape
+cellEncoding :: Cell -> [Double]
+cellEncoding Empty = oneHot 4 3 ++ oneHot 5 4
+cellEncoding (Occupied color shape) =
+  oneHot 4 (fromEnum color) ++ oneHot 5 (shapeGroup shape)
 
-colorCode :: Color -> Int
-colorCode color = 1 + fromEnum color
+shapeGroup :: Shape -> Int
+shapeGroup Virus = 0
+shapeGroup Disconnected = 1
+shapeGroup North = 1
+shapeGroup South = 1
+shapeGroup East = 2
+shapeGroup West = 3
+
+oneHot :: Int -> Int -> [Double]
+oneHot size index = [if position == index then 1 else 0 | position <- [0 .. size - 1]]
 
 countClearedNonViruses :: ClearResults -> Int
 countClearedNonViruses NoClear = 0

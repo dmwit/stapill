@@ -37,7 +37,7 @@ class SimulatorProtocolTests(unittest.TestCase):
         first = self.request([{"type": "reset", "seed": 7, "level": 0}, {"type": "close"}])[0]
         second = self.request([{"type": "reset", "seed": 7, "level": 0}, {"type": "close"}])[0]
         self.assertEqual(first, second)
-        self.assertEqual(len(first["observation"]), 133)
+        self.assertEqual(len(first["observation"]), 1160)
         self.assertEqual(len(first["action_mask"]), 512)
         self.assertTrue(any(first["action_mask"]))
 

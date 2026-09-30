@@ -29,7 +29,7 @@ handles the Gymnasium and Stable-Baselines3 integration.
 
 - [x] Use a fixed-shape numeric observation suitable for standard SB3 policies.
 - [x] Include board contents and the current pill's two colors. Do not include the lookahead colors.
-- [x] Include any time/state scalars needed by the reward or value function.
+- [x] Include current gravity as normalized frames-per-row and rows-per-frame features.
 - [x] Begin with pill information supplied to the network at the input; consider deeper conditioning only if needed.
 
 ## Rewards
