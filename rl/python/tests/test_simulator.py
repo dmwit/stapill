@@ -1,55 +1,35 @@
-import json
-import os
-from pathlib import Path
-import subprocess
 import unittest
-
-
-ROOT = Path(__file__).resolve().parents[3]
-
-
-def simulator_path() -> str:
-    configured = os.environ.get("DR_MARIO_SIMULATOR")
-    if configured:
-        return configured
-    matches = sorted(
-        path
-        for path in ROOT.glob("dist-newstyle/**/dr-mario-simulator/dr-mario-simulator")
-        if path.is_file() and os.access(path, os.X_OK)
-    )
-    if not matches:
-        raise unittest.SkipTest("build dr-mario-simulator before running protocol tests")
-    return str(matches[-1])
+import sys
+open('/tmp/pytest_path.txt', 'w').write(str(sys.path))
+from dr_mario_env import SimulatorClient
 
 
 class SimulatorProtocolTests(unittest.TestCase):
-    def request(self, messages: list[dict]) -> list[dict]:
-        process = subprocess.run(
-            [simulator_path()],
-            input="".join(json.dumps(message) + "\n" for message in messages),
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        return [json.loads(line) for line in process.stdout.splitlines()]
+    RESET_7_0 = {"type": "reset", "seed": 7, "level": 0}
+
+    # TODO: errr... we should just be calling SimulatorClient methods, I think
+    def requests(self, messages: list[dict]) -> list[dict]:
+        with SimulatorClient() as sim:
+            return list(map(sim.request, messages))
+
+    def request(self, message: dict) -> dict:
+        return self.requests([message])[0]
 
     def test_reset_is_seeded_and_has_fixed_spaces(self) -> None:
-        first = self.request([{"type": "reset", "seed": 7, "level": 0}, {"type": "close"}])[0]
-        second = self.request([{"type": "reset", "seed": 7, "level": 0}, {"type": "close"}])[0]
+        first = self.request(self.RESET_7_0)
+        second = self.request(self.RESET_7_0)
         self.assertEqual(first, second)
         self.assertEqual(len(first["observation"]), 1160)
         self.assertEqual(len(first["action_mask"]), 512)
         self.assertTrue(any(first["action_mask"]))
 
     def test_invalid_action_is_replaced(self) -> None:
-        reset = self.request([{"type": "reset", "seed": 7, "level": 0}, {"type": "close"}])[0]
+        reset = self.request(self.RESET_7_0)
         invalid_action = next(index for index, valid in enumerate(reset["action_mask"]) if not valid)
-        replies = self.request([
-            {"type": "reset", "seed": 7, "level": 0},
+        info = self.requests([
+            self.RESET_7_0,
             {"type": "step", "action": invalid_action},
-            {"type": "close"},
-        ])
-        info = replies[1]["info"]
+        ])[1]["info"]
         self.assertTrue(info["action_was_invalid"])
         self.assertIn(info["executed_action"], range(512))
 

@@ -9,41 +9,21 @@ import subprocess
 from typing import Any, Sequence
 
 
-def _default_command() -> list[str]:
-    configured = os.environ.get("DR_MARIO_SIMULATOR")
-    if configured:
-        return [configured]
-
-    root = Path(__file__).resolve().parents[3]
-    candidates = [
-        path
-        for path in root.glob("dist-newstyle/**/dr-mario-simulator/dr-mario-simulator")
-        if path.is_file() and os.access(path, os.X_OK)
-    ]
-    if candidates:
-        return [str(sorted(candidates)[-1])]
-    raise FileNotFoundError(
-        "could not find dr-mario-simulator; build it with "
-        "`cabal build exe:dr-mario-simulator` or set DR_MARIO_SIMULATOR"
-    )
-
-
 class SimulatorClient:
     """Persistent request/response client for one Haskell simulator process."""
 
     def __init__(self, command: Sequence[str] | None = None) -> None:
         self._process = subprocess.Popen(
-            list(command) if command is not None else _default_command(),
+            list(command) if command is not None else ['stapill-hiss'],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
+            encoding='utf-8',
+            bufsize=1, # line buffered
         )
 
+    # TODO: this boundary interface needs some work
     def request(self, message: dict[str, Any]) -> dict[str, Any]:
-        if self._process.stdin is None or self._process.stdout is None:
-            raise RuntimeError("simulator process pipes are unavailable")
         self._process.stdin.write(json.dumps(message) + "\n")
         self._process.stdin.flush()
         line = self._process.stdout.readline()
@@ -56,18 +36,17 @@ class SimulatorClient:
         return response
 
     def reset(self, seed: int = 1, level: int = 0) -> dict[str, Any]:
-        return self.request({"type": "reset", "seed": int(seed), "level": int(level)})
+        return self.request({"type": "reset", "seed": seed, "level": level})
 
     def step(self, action: int) -> dict[str, Any]:
-        return self.request({"type": "step", "action": int(action)})
+        return self.request({"type": "step", "action": action})
 
     def close(self) -> None:
         if self._process.poll() is not None:
             return
         try:
-            if self._process.stdin is not None:
-                self._process.stdin.write(json.dumps({"type": "close"}) + "\n")
-                self._process.stdin.flush()
+            self._process.stdin.write(json.dumps({"type": "close"}) + "\n")
+            self._process.stdin.flush()
         finally:
             self._process.wait(timeout=2)
 

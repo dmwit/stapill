@@ -1,5 +1,4 @@
-packages: maryodel/haskell
-          rl/haskell
+packages: maryodel/haskell hiss
 with-compiler: ghc-9.2
 jobs: $ncpus
 package *
