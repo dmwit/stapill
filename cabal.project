@@ -1,0 +1,6 @@
+packages: maryodel/haskell
+          rl/haskell
+with-compiler: ghc-9.2
+jobs: $ncpus
+package *
+    documentation: false

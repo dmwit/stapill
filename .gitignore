@@ -1,0 +1,27 @@
+# Haskell/Cabal build output
+dist-newstyle/
+.cabal-sandbox/
+cabal.project.local
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Training output
+tensorboard/
+runs/
+checkpoints/
+*.zip
+*.pt
+*.pth
+*.ckpt
