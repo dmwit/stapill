@@ -1,292 +1,388 @@
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Main (main) where
 
-import Control.Exception (SomeException, displayException, try)
+import Control.Applicative (liftA2)
+
+import Crypto.Hash.SHA256 (hash)
+
 import Data.Aeson
-import qualified Data.Aeson.Key as Key
-import qualified Data.ByteString.Char8 as BS
-import qualified Data.ByteString.Lazy.Char8 as BL
-import Data.List (find)
-import Data.Maybe (mapMaybe)
+import Data.Aeson.TH (deriveJSON)
+import Data.Bits (shiftL, shiftR, (.|.), (.&.))
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS8
+import qualified Data.ByteString.Lazy.Char8 as BL8
+import Data.Functor ((<&>))
+import Data.Maybe (fromJust)
+import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Map.Strict as M
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import qualified Data.Map as M
+import Data.Text (Text)
+import Data.Vector (Vector)
 import qualified Data.Vector as V
-import Data.Word (Word16)
+import Data.Word (Word32, Word64)
+
 import Dr.Mario.Model
 import Dr.Mario.Pathfinding
-import GHC.Generics (Generic)
+import JSONTH
+
+import GHC.Stack (HasCallStack)
+
 import System.IO (BufferMode(LineBuffering), hSetBuffering, stdout)
+import System.Random.MWC (GenIO, Uniform, uniformM, uniformRM)
+import qualified System.Random.MWC as MWC
 
 data Request
-  = ResetRequest { resetSeed :: !Word16, resetLevel :: !Int }
-  | StepRequest { stepAction :: !Int }
-  | CloseRequest
-  deriving (Eq, Show, Generic)
+  = RequestReset { resetSeed :: !Word64, resetLevel :: !Int }
+  | RequestStep { stepAction :: !Int }
+  | RequestClose
+  deriving (Eq, Ord, Read, Show)
 
-instance FromJSON Request where
-  parseJSON = withObject "Request" $ \o -> do
-    kind <- o .: "type"
-    case (kind :: String) of
-      "reset" -> ResetRequest <$> o .:? "seed" .!= 1 <*> o .:? "level" .!= 0
-      "step" -> StepRequest <$> o .: "action"
-      "close" -> pure CloseRequest
-      _ -> fail "unknown request type"
+deriveJSON strictPrefixOptions ''Request
+
+data ImmutableState = ImmutableState
+  { immViruses :: Int
+  , immPillsUsed :: Int
+  , immFrame :: Int
+  , immCoarseSpeed :: CoarseSpeed
+  , immLookahead :: Lookahead
+  , immPaths :: HashMap MidPlacement MidPath
+  } deriving (Eq, Ord, Read, Show)
 
 data SimState = SimState
-  { simLevel :: !Int
-  , simLookaheads :: !(V.Vector Lookahead)
-  , simLookaheadIndex :: !Int
-  , simBoard :: !Board
-  , simLockedPills :: !Int
-  , simFrames :: !Int
-  , simFallbackSeed :: !Word16
-  , simDone :: !Bool
-  , simWon :: !Bool
+  { simBoard :: IOBoard
+  , simPillRNG :: GenIO
+  , simMoveRNG :: GenIO
+  , simOther :: IORef ImmutableState
   }
 
-data Action = Action
-  { actionIndex :: !Int
-  , actionPill :: !Pill
-  , actionFrames :: !Int
-  }
+data Tensors
+  = TensorsNamed (HashMap Text Tensors)
+  | TensorsScalars (HashMap Text Double)
+  -- | becomes a 2D array of size indexCount x length indices; result[i][j] = i == raw[j]
+  | TensorsOneHot { indexCount :: Int, indices :: V.Vector Int }
+  -- | becomes a 1D array of size indexCount; result[i] = i in indices
+  | TensorsIndices { indexCount :: Int, indices :: V.Vector Int }
+  | TensorsReal (V.Vector Double)
+  deriving (Eq, Ord, Read, Show)
 
-data Reply = Reply
-  { replyType :: !String
-  , replyObservation :: ![Double]
-  , replyMask :: ![Bool]
-  , replyReward :: !Double
-  , replyTerminated :: !Bool
-  , replyTruncated :: !Bool
-  , replyInfo :: !Value
-  }
+deriveJSON strictPrefixOptions { fieldLabelModifier = id } ''Tensors
 
-instance ToJSON Reply where
-  toJSON reply = object
-    [ "type" .= replyType reply
-    , "observation" .= replyObservation reply
-    , "action_mask" .= replyMask reply
-    , "reward" .= replyReward reply
-    , "terminated" .= replyTerminated reply
-    , "truncated" .= replyTruncated reply
-    , "info" .= replyInfo reply
-    ]
+data Reply
+  = ReplyError { errorDescription :: String }
+  | ReplyReset
+    { resetObservation :: Tensors
+    , resetValidActions :: V.Vector Int
+    }
+  | ReplyStep
+    { stepObservation :: Tensors
+    , stepReward :: HashMap Text Double
+    , stepValidActions :: V.Vector Int
+    , stepTerminated :: Bool
+    }
+  deriving (Eq, Ord, Read, Show)
+
+deriveJSON strictPrefixOptions ''Reply
 
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
-  loop Nothing
+  linewise uninit
   where
-    loop :: Maybe SimState -> IO ()
-    loop state = do
-      line <- BS.getLine
-      if BS.null line
-        then pure ()
-        else do
-          result <- try (handle state (eitherDecode (BL.fromStrict line)))
-            :: IO (Either SomeException (Maybe SimState, Maybe Reply))
-          case result of
-            Left err -> do
-              BL.putStrLn (encode (errorReply (displayException err)))
-              loop state
-            Right (nextState, reply) -> do
-              maybe (pure ()) (BL.putStrLn . encode) reply
-              case reply of
-                Nothing -> pure ()
-                Just _ -> loop nextState
+  reply = BL8.putStrLn . encode
+  complain err = reply ReplyError { errorDescription = err }
+  linewise act = do
+    line <- BS8.getLine
+    case eitherDecode (BL8.fromStrict line) of
+      Left err -> complain err >> linewise act
+      Right req -> act req
 
-handle :: Maybe SimState -> Either String Request -> IO (Maybe SimState, Maybe Reply)
-handle _ (Left err) = pure (Nothing, Just (errorReply err))
-handle _ (Right (ResetRequest seed level)) = do
-  let (lookaheads, board) = randomLevel seed level
-      state = SimState level lookaheads 0 board 0 0 seed False False
-  pure (Just state, Just (stateReply "reset" state 0 False False []))
-handle Nothing (Right (StepRequest _)) =
-  pure (Nothing, Just (errorReply "step requested before reset"))
-handle (Just state) (Right (StepRequest action)) = do
-  let (state', reply) = stepState state action
-  pure (Just state', Just reply)
-handle _ (Right CloseRequest) = pure (Nothing, Nothing)
-
-errorReply :: String -> Reply
-errorReply message = Reply
-  { replyType = "error"
-  , replyObservation = []
-  , replyMask = replicate actionCount False
-  , replyReward = 0
-  , replyTerminated = False
-  , replyTruncated = False
-  , replyInfo = object ["error" .= message]
-  }
-
-actionCount :: Int
-actionCount = 8 * 16 * 4
-
-stateReply :: String -> SimState -> Double -> Bool -> Bool -> [(String, Value)] -> Reply
-stateReply kind state reward terminated truncated extra = Reply
-  { replyType = kind
-  , replyObservation = observation state
-  , replyMask = legalMask state
-  , replyReward = reward
-  , replyTerminated = terminated
-  , replyTruncated = truncated
-  , replyInfo = object
-      ( [ "level" .= simLevel state
-        , "viruses" .= countViruses (simBoard state)
-        , "frames" .= simFrames state
-        , "locked_pills" .= simLockedPills state
-        , "gravity_frames_per_row" .= gravityFrames state
-        , "gravity_rows_per_frame" .= (1 / fromIntegral (gravityFrames state) :: Double)
-        ] ++ map (\(key, value) -> Key.fromString key .= value) extra
-      )
-  }
-
-stepState :: SimState -> Int -> (SimState, Reply)
-stepState state requested =
-  let beforeBoard = simBoard state
-      actions = legalActions state
-      (chosen, replaced, fallbackSeed') = chooseAction state requested actions
-  in case chosen of
-    Nothing ->
-      let state' = state { simDone = True, simWon = False, simFallbackSeed = fallbackSeed' }
-          info = [("action_was_invalid", Bool True), ("loss_reason", String "no_legal_actions")]
-      in (state', stateReply "step" state' (-100) True False info)
-    Just action ->
-      case placeDetails beforeBoard (actionPill action) of
-        Nothing ->
-          let state' = state { simDone = True, simWon = False, simFallbackSeed = fallbackSeed' }
-              info = [("action_was_invalid", Bool True), ("loss_reason", String "placement_rejected")]
-          in (state', stateReply "step" state' (-100) True False info)
-        Just (clearResult, afterBoard) ->
-          let clearedNonViruses = countClearedNonViruses clearResult
-              clearedViruses = countViruses beforeBoard - countViruses afterBoard
-              alignmentDelta = alignmentScore afterBoard - alignmentScore beforeBoard
-              nextIndex = simLookaheadIndex state
-              state' = state
-                { simBoard = afterBoard
-                , simLookaheadIndex = nextIndex + 1
-                , simLockedPills = simLockedPills state + 1
-                , simFrames = simFrames state + actionFrames action
-                , simFallbackSeed = fallbackSeed'
-                }
-              won = countViruses afterBoard == 0
-              state'' = state' { simDone = won, simWon = won }
-              reward = 0.1
-                     + 0.25 * fromIntegral clearedNonViruses
-                     + 0.05 * fromIntegral alignmentDelta
-                     + 2.0 * fromIntegral clearedViruses
-                     + if won then 100 else 0
-                     - 0.001 * fromIntegral (actionFrames action)
-              info =
-                [ ("action_was_invalid", Bool replaced)
-                , ("requested_action", toJSON requested)
-                , ("executed_action", toJSON (actionIndex action))
-                , ("frames_elapsed", toJSON (actionFrames action))
-                , ("cleared_non_viruses", toJSON clearedNonViruses)
-                , ("cleared_viruses", toJSON clearedViruses)
-                , ("alignment_delta", toJSON alignmentDelta)
-                , ("won", Bool won)
-                ]
-          in (state'', stateReply "step" state'' reward won False info)
-
-chooseAction :: SimState -> Int -> [Action] -> (Maybe Action, Bool, Word16)
-chooseAction state requested actions =
-  case find ((== requested) . actionIndex) actions of
-    Just action -> (Just action, False, simFallbackSeed state)
-    Nothing
-      | null actions -> (Nothing, True, simFallbackSeed state)
-      | otherwise ->
-          let nextSeed = advanceRNG (simFallbackSeed state)
-              index = fromIntegral nextSeed `mod` length actions
-          in (Just (actions !! index), True, nextSeed)
-
-legalMask :: SimState -> [Bool]
-legalMask state =
-  let legal = legalActions state
-      indices = map actionIndex legal
-  in [index `elem` indices | index <- [0 .. actionCount - 1]]
-
-legalActions :: SimState -> [Action]
-legalActions state = mapMaybe (toAction lookahead) (HM.toList reachable)
-  where
-    lookahead = currentLookahead state
-    reachable = unsafeApproxReachable (simBoard state) (launchPill lookahead)
-
-    toAction lk (candidate, move) = do
-      index <- encodeAction lk (content candidate) (bottomLeftPosition candidate)
-      pure Action
-        { actionIndex = index
-        , actionPill = candidate
-        , actionFrames = 1 + abs (xDelta move) + abs (yDelta move) * gravityFrames state
-                       + maybe 0 (const 1) (finalRotation move)
+  uninit = \case
+    RequestClose {} -> pure ()
+    RequestStep {} -> do
+      complain "step requested before reset"
+      linewise uninit
+    RequestReset { resetSeed = seed, resetLevel = level } -> do
+      sim <- newSimState seed level
+      observation <- observe sim
+      actions <- actionIndices sim
+      reply ReplyReset
+        { resetObservation = observation
+        , resetValidActions = actions
         }
+      linewise (running sim)
 
-gravityFrames :: SimState -> Int
-gravityFrames state = gravity Low (simLockedPills state)
+  running sim = \case
+    RequestClose {} -> pure ()
+    req@RequestReset {} -> uninit req
+    RequestStep { stepAction = action } -> do
+      (requestedPill, actualPill@pill, path) <- validateAction sim mp_
+      rsPre <- actionRewards sim requestedPill actualPill
+      -- TODO: look for HasCallStack and turn it into an error reply instead of a crash
+      result <- stepSimState sim pill path
+      rsPost <- outcomeRewards sim result
 
-currentLookahead :: SimState -> Lookahead
-currentLookahead state =
-  simLookaheads state V.! (simLookaheadIndex state `mod` V.length (simLookaheads state))
+      observation <- observe sim
+      actions <- actionIndices sim
 
-encodeAction :: Lookahead -> PillContent -> Position -> Maybe Int
-encodeAction lookahead content position = do
-  if x position >= 0 && x position < 8 && y position >= 0 && y position < 16
-    then pure ()
-    else Nothing
-  config <- case (orientation content, bottomLeftColor content, otherColor content) of
-    (Horizontal, l, r) | (l, r) == (leftColor lookahead, rightColor lookahead) -> Just 0
-                        | (l, r) == (rightColor lookahead, leftColor lookahead) -> Just 1
-    (Vertical, l, r) | (l, r) == (leftColor lookahead, rightColor lookahead) -> Just 2
-                      | (l, r) == (rightColor lookahead, leftColor lookahead) -> Just 3
-    _ -> Nothing
-  pure (config * 128 + y position * 8 + x position)
+      reply ReplyStep
+        { stepObservation = observation
+        , stepReward = rsPre <> rsPost
+        , stepValidActions = actions
+        , stepTerminated = resultWon result || resultLost result
+        }
+      linewise (running sim)
+      where
+      mp_ = parseAction action
 
-observation :: SimState -> [Double]
-observation state = boardValues (simBoard state)
-  ++ oneHot 3 (fromEnum (leftColor lookahead))
-  ++ oneHot 3 (fromEnum (rightColor lookahead))
-  ++ [fromIntegral frames / 40, 1 / fromIntegral frames]
+newSimState :: Word64 -> Int -> IO SimState
+newSimState seed level = do
+  gameRNG <- splitSeed seed (BS8.pack "level")
+  playerRNG <- splitSeed seed (BS8.pack "moves")
+  nesRNG <- uniformRM (2, maxBound) gameRNG >>= mnewRNG
+  board <- munsafeRandomBoard nesRNG level
+  lk <- uniformM gameRNG
+  firstFrame <- uniformRM (0, 1) gameRNG
+  coarseSpeed <- ([Med, Hi]!!) <$> uniformRM (0, 1) gameRNG
+
+  other <- newIORef ImmutableState
+    { immViruses = max 4 . min 84 $ level * 4
+    , immPillsUsed = 0
+    , immFrame = firstFrame
+    , immCoarseSpeed = coarseSpeed
+    , immPaths = error "immPaths accessed before pathfinding was executed (newSimState)"
+    , immLookahead = lk
+    }
+  let sim = SimState
+        { simBoard = board
+        , simPillRNG = gameRNG
+        , simMoveRNG = playerRNG
+        , simOther = other
+        }
+  sim <$ simReachable sim
+
+data SimStepResults = SimStepResults
+  { resultCleanup :: Maybe CleanupResults -- ^ redundant with 'resultClears', but might be handy
+  , resultClears :: Maybe ClearResults
+  , resultFrames :: Int
+  , resultWon :: Bool
+  , resultLost :: Bool
+  } deriving (Eq, Ord, Read, Show)
+
+stepSimState :: SimState -> Pill -> MidPath -> IO SimStepResults
+stepSimState sim pill path = do
+  imm <- readIORef (simOther sim)
+  details <- mplaceDetails (simBoard sim) pill
+  lk <- uniformM (simPillRNG sim)
+
+  let cleanup = summarizeClearResults <$> details
+      dframes = mpPathLength path + interControlFrameCost
+        (approxFrameCostModel (immCoarseSpeed imm))
+        (y (bottomLeftPosition pill))
+        cleanup
+      imm' = ImmutableState
+        { immViruses = immViruses imm - maybe 0 clears cleanup
+        , immPillsUsed = immPillsUsed imm + 1
+        , immFrame = immFrame imm + dframes
+        , immCoarseSpeed = immCoarseSpeed imm
+        , immLookahead = lk
+        , immPaths = error "immPaths accessed before pathfinding was executed (stepSimState)"
+        }
+  writeIORef (simOther sim) imm'
+  paths <- simReachable sim
+
+  return SimStepResults
+    { resultCleanup = cleanup
+    , resultClears = details
+    , resultFrames = dframes
+    , resultWon = immViruses imm' == 0
+    , resultLost = HM.size paths == 0
+    }
+
+-- | Updates the reachable placements, and returns them too.
+simReachable :: SimState -> IO (HashMap MidPlacement MidPath)
+simReachable sim = do
+  imm <- readIORef (simOther sim)
+  paths <- mapproxReachable (simBoard sim) (immFrame imm .&. 1 == 0) (gravity (immCoarseSpeed imm) (immPillsUsed imm))
+  paths <$ writeIORef (simOther sim) imm { immPaths = paths }
+
+validateAction :: HasCallStack => SimState -> MidPlacement -> IO (Pill, Pill, MidPath)
+validateAction sim mp = do
+  imm <- readIORef (simOther sim)
+  let paths = immPaths imm
+      pill mp' = mpPill mp' (immLookahead imm)
+      pillify (mp', path) = (pill mp, pill mp', path)
+  pillify <$> case HM.lookup mp paths of
+    Just path -> pure (mp, path)
+    Nothing -> (HM.toList paths !!) <$> uniformRM (0, HM.size paths - 1) (simMoveRNG sim)
+
+actionRewards :: SimState -> Pill -> Pill -> IO (HashMap Text Double)
+actionRewards sim reqPill pill = do
+  horzReward <- sumFor placements \(pos, cell) ->
+    sumFor [0..7] \x' -> do
+      nearbyCell <- mget (simBoard sim) pos { x = x' }
+      pure $ if nearbyCell == Just cell then 0.5 ^^ abs (x' - x pos) else 0
+  vertReward <- sumFor placements \(pos, cell) ->
+    sumFor [0..15] \y' -> do
+      nearbyCell <- mget (simBoard sim) pos { y = y' }
+      pure $ if nearbyCell == Just cell then 0.5 ^^ abs (y' - y pos) else 0
+  chasm <- case orientation (content pill) of
+    Vertical -> pure 0
+    Horizontal -> sumFor placements \(pos, _) -> countEmpties (simBoard sim) (unsafeMove down pos)
+  pure $ HM.fromList
+    [ ("match/horz", horzReward)
+    , ("match/vert", vertReward)
+    , ("invalid", true1 (reqPill /= pill))
+    , ("chasm", fromIntegral chasm)
+    ]
   where
-    lookahead = currentLookahead state
-    frames = gravityFrames state
+  placements =
+    [ (bottomLeftPosition pill, bottomLeftCell (content pill))
+    , (otherPosition pill, otherCell (content pill))
+    ]
+  sumFor xs f = sum <$> traverse f xs
 
-boardValues :: Board -> [Double]
-boardValues board =
-  concat [cellEncoding (unsafeGet board (Position x y))
-  | y <- [15,14..0], x <- [0..7]
+outcomeRewards :: SimState -> SimStepResults -> IO (HashMap Text Double)
+outcomeRewards _sim result = pure $ HM.fromList
+  [ ("frames", fromIntegral (resultFrames result))
+  , ("viruses", sum (fromIntegral . clears <$> resultCleanup result))
+  , ("halves", sum (fromIntegral . countHalves <$> resultClears result))
+  , ("win", true1 (resultWon result))
+  , ("lose", true1 (resultLost result))
   ]
 
-cellEncoding :: Cell -> [Double]
-cellEncoding Empty = oneHot 4 3 ++ oneHot 5 4
-cellEncoding (Occupied color shape) =
-  oneHot 4 (fromEnum color) ++ oneHot 5 (shapeGroup shape)
+countHalves :: ClearResults -> Int
+countHalves = goClear where
+  goClear = \case
+    NoClear -> 0
+    Clear ocs ds -> M.size (M.filter (\oc -> oshape oc /= Virus) ocs) + goDrops ds
 
-shapeGroup :: Shape -> Int
-shapeGroup Virus = 0
-shapeGroup Disconnected = 1
-shapeGroup North = 1
-shapeGroup South = 1
-shapeGroup East = 2
-shapeGroup West = 3
+  goDrops = \case
+    NoDrop -> 0
+    Drop _ cs -> goClear cs
 
-oneHot :: Int -> Int -> [Double]
-oneHot size index = [if position == index then 1 else 0 | position <- [0 .. size - 1]]
+countEmpties :: IOBoard -> Position -> IO Int
+countEmpties board pos = mget board pos >>= \case
+  Just Empty -> succ <$> countEmpties board (unsafeMove down pos)
+  _ -> pure 0
 
-countClearedNonViruses :: ClearResults -> Int
-countClearedNonViruses NoClear = 0
-countClearedNonViruses (Clear cells drops) =
-  length [() | OCell _ shape <- M.elems cells, shape /= Virus]
-  + countDropped drops
-  where
-    countDropped NoDrop = 0
-    countDropped (Drop _ clears) = countClearedNonViruses clears
+true1 :: Bool -> Double
+true1 b = if b then 1 else 0
 
-alignmentScore :: Board -> Int
-alignmentScore board =
-  sum [sameColor (Position x y) (Position (x + 1) y) | x <- [0..6], y <- [0..15]]
-  + sum [sameColor (Position x y) (Position x (y + 1)) | x <- [0..7], y <- [0..14]]
-  where
-    sameColor p q = case (getColor board p, getColor board q) of
-      (Just a, Just b) | a == b -> 1
-      _ -> 0
+splitSeed :: Word64 -> BS.ByteString -> IO GenIO
+splitSeed n tag = MWC.initialize . bsToWord32s . hash $ word64ToByteString n <> tag
+
+word64ToByteString :: Word64 -> BS.ByteString
+word64ToByteString = BS.pack . map fromIntegral . take 8 . iterate (`shiftR` 8)
+
+bsToWord32s :: BS.ByteString -> Vector Word32
+bsToWord32s bs = V.generate ((BS.length bs + 3) `shiftR` 2) \i_ -> let i = i_ `shiftL` 2 in
+  BS.foldl' (\a b -> shiftL a 8 .|. fromIntegral b) 0 . BS.take 4 . BS.drop i $ bs
+
+actionIndices :: SimState -> IO (Vector Int)
+actionIndices sim = do
+  paths <- immPaths <$> readIORef (simOther sim)
+  pure . V.fromListN (HM.size paths) . map ppAction $ HM.keys paths
+
+ppAction :: MidPlacement -> Int
+ppAction mp = ppPosition (mpBottomLeft mp) .|. shiftL (mpRotations mp) 7
+
+parseAction :: Int -> MidPlacement
+parseAction n = MidPlacement
+  { mpBottomLeft = parsePosition n
+  , mpRotations = (n `shiftR` 7) .&. 0x3
+  }
+
+observe :: SimState -> IO Tensors
+observe sim = TensorsNamed . HM.fromList <$> traverse sequence
+  [ ("shape", observeShape (simBoard sim))
+  , ("color", observeColor (simBoard sim))
+  , ("lookahead", observeLookahead (simOther sim))
+  , ("gravity", observeGravity (simOther sim))
+  ]
+
+observeColor :: HasCallStack => IOBoard -> IO Tensors
+observeColor b = do
+  is <- V.generateM positionCount \i -> fst . ppMCell <$> mget b (parsePosition i)
+  pure TensorsOneHot
+    { indexCount = indexCountMaybe indexCountColor
+    , indices = is
+    }
+
+observeShape :: HasCallStack => IOBoard -> IO Tensors
+observeShape b = do
+  is <- V.generateM positionCount \i -> snd . ppMCell <$> mget b (parsePosition i)
+  pure TensorsOneHot
+    { indexCount = indexCountMaybe indexCountShape
+    , indices = is
+    }
+
+ppMCell :: HasCallStack => Maybe Cell -> (Int, Int)
+ppMCell = ppCell . fromJust
+
+ppCell :: Cell -> (Int, Int)
+ppCell = \case
+  Empty -> (0, 0)
+  Occupied c s -> (1 + indexColor c, 1 + indexShape s)
+
+observeLookahead :: IORef ImmutableState -> IO Tensors
+observeLookahead ref = ppLookahead . immLookahead <$> readIORef ref
+
+ppLookahead :: Lookahead -> Tensors
+ppLookahead lk = TensorsOneHot
+  { indexCount = indexCountColor
+  , indices = V.fromListN 2 [indexColor (leftColor lk), indexColor (rightColor lk)]
+  }
+
+observeGravity :: IORef ImmutableState -> IO Tensors
+observeGravity ref = readIORef ref <&> \imm -> ppGravity (gravity (immCoarseSpeed imm) (immPillsUsed imm))
+
+ppGravity :: Int -> Tensors
+ppGravity n = TensorsScalars $ HM.fromList
+  [ ("superframe/row", fromIntegral n / 40)
+  , ("row/frame", recip (fromIntegral n))
+  ]
+
+indexCountMaybe :: Int -> Int
+indexCountMaybe = succ
+
+indexCountColor :: Int
+indexCountColor = 3
+
+indexColor :: Color -> Int
+indexColor = \case
+  Blue -> 0
+  Red -> 1
+  Yellow -> 2
+
+indexCountShape :: Int
+indexCountShape = 4
+
+indexShape :: Shape -> Int
+indexShape = \case
+  Virus -> 0
+  Disconnected -> 1
+  North -> 1
+  South -> 1
+  East -> 2
+  West -> 3
+
+ppPosition :: Position -> Int
+ppPosition pos = x pos + shiftL (y pos) 3
+
+parsePosition :: Int -> Position
+parsePosition n = Position
+  { x = (n `shiftR` 0) .&. 0x7
+  , y = (n `shiftR` 3) .&. 0xf
+  }
+
+positionCount :: Int
+positionCount = 8*16
+
+instance Uniform Lookahead where uniformM g = liftA2 Lookahead (uniformM g) (uniformM g)
+instance Uniform Color where uniformM g = toEnum <$> uniformRM (0, 2) g

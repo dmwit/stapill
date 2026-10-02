@@ -26,6 +26,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         self,
         simulator_command: Sequence[str] | None = None,
         level: int = 0,
+        reward_weights: dict[str, float] | None = None,
         max_steps: int = 512,
         render_mode: str | None = None,
     ) -> None:
@@ -33,7 +34,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         self.level = level
         self.max_steps = max_steps
         self.render_mode = render_mode
-        self.action_space = spaces.Discrete(8 * 16 * 4)
+        self.action_space = spaces.Discrete(8 * 16 * 4) # columns x rows x rotations
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(1160,), dtype=np.float32
         )
@@ -42,34 +43,36 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         self._steps = 0
         self._last_response: dict[str, Any] | None = None
 
+        if reward_weights is not None: self.reward_weights = reward_weights
+        else: self.reward_weights = {
+            "match/horz": 1.7,
+            "match/vert": 1,
+            "invalid": -10,
+            "chasm": -0.1/16,
+            "frames": -0.01/100,
+            "viruses": 100,
+            "halves": 3,
+            "win": 1000,
+            "lose": -1000,
+            }
+
     def _get_simulator(self) -> SimulatorClient:
         if self._simulator is None:
-            self._simulator = SimulatorClient(self._simulator_command)
+            self._simulator = SimulatorClient(self.action_space.n, self._simulator_command)
         return self._simulator
-
-    @staticmethod
-    def _observation(response: dict[str, Any]) -> np.ndarray:
-        observation = np.asarray(response["observation"], dtype=np.float32)
-        if observation.shape != (1160,):
-            raise ValueError(f"unexpected observation shape: {observation.shape}")
-        return observation
-
-    @staticmethod
-    def _info(response: dict[str, Any]) -> dict[str, Any]:
-        return dict(response.get("info", {}))
 
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
         requested_level = self.level if options is None else options.get("level", self.level)
-        response = self._get_simulator().reset(
+        self._last_response = self._get_simulator().reset(
             seed=1 if seed is None else seed,
             level=int(requested_level),
         )
         self._steps = 0
-        self._last_response = response
-        return self._observation(response), self._info(response)
+        assert self._last_response.observation.shape == (1160,)
+        return self._last_response.observation, {}
 
     def step(
         self, action: np.int64 | int
@@ -78,32 +81,32 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             raise RuntimeError("reset must be called before step")
         response = self._get_simulator().step(int(action))
         self._steps += 1
-        truncated = self._steps >= self.max_steps and not response["terminated"]
+        truncated = self._steps >= self.max_steps and not response.terminated
         self._last_response = response
         return (
-            self._observation(response),
-            float(response["reward"]),
-            bool(response["terminated"]),
+            response.observation,
+            self._weight_rewards(response.reward),
+            response.terminated,
             truncated,
-            self._info(response),
+            response.reward,
         )
 
     def action_masks(self) -> np.ndarray:
         if self._last_response is None:
             return np.ones(self.action_space.n, dtype=bool)
-        return np.asarray(self._last_response["action_mask"], dtype=bool)
+        return self._last_response.actions
 
     def render(self) -> str:
         if self._last_response is None:
             return "<not reset>"
-        values = self._last_response["observation"]
+        values = self._last_response.raw_observation["named"]
         rows = []
         for row in range(16):
             cells = []
             for column in range(8):
-                offset = (row * 8 + column) * 9
-                color = int(np.argmax(values[offset : offset + 4]))
-                shape = int(np.argmax(values[offset + 4 : offset + 9]))
+                offset = row * 8 + column
+                color = values["color"][offset]
+                shape = values["shape"][offset]
                 cells.append("." if color == 3 else f"{color}/{shape}")
             rows.append(" ".join(cells))
         rendered = "\n".join(rows)
@@ -116,3 +119,9 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         if self._simulator is not None:
             self._simulator.close()
             self._simulator = None
+
+    def _weight_rewards(self, rewards):
+        reward = 0
+        for k, v in self.reward_weights.items():
+            reward += rewards[k] * v
+        return reward
