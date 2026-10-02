@@ -19,10 +19,20 @@ class SimulatorReply:
     reward: dict[str, float]
     terminated: bool
 
+    def __eq__(self, other):
+        obs_eq = self.raw_observation == other.raw_observation
+        if obs_eq: assert np.array_equal(self.observation, other.observation)
+        return (True
+            and obs_eq
+            and np.array_equal(self.actions, other.actions)
+            and self.reward == other.reward
+            and self.terminated == other.terminated
+            )
+
 class SimulatorClient:
     """Persistent request/response client for one Haskell simulator process."""
 
-    def __init__(self, action_count: int, command: Sequence[str] | None = None) -> None:
+    def __init__(self, action_count: int = 512, command: Sequence[str] | None = None) -> None:
         self.action_count = action_count
         self._process = subprocess.Popen(
             list(command) if command is not None else ['stapill-hiss'],
