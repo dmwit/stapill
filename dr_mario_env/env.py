@@ -25,19 +25,20 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
     def __init__(
         self,
         simulator_command: Sequence[str] | None = None,
-        level: int = 0,
+        level_distribution = [],
         reward_weights: dict[str, float] | None = None,
         max_steps: int = 512,
         render_mode: str | None = None,
     ) -> None:
         super().__init__()
-        self.level = level
         self.max_steps = max_steps
         self.render_mode = render_mode
         self.action_space = spaces.Discrete(8 * 16 * 4) # columns x rows x rotations
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(1160,), dtype=np.float32
         )
+        # not public because we maintain a non-emptiness invariant
+        self._level_distribution = level_distribution if level_distribution else [0]
         self._simulator_command = simulator_command
         self._simulator: SimulatorClient | None = None
         self._steps = 0
@@ -61,14 +62,16 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             self._simulator = SimulatorClient(self.action_space.n, self._simulator_command)
         return self._simulator
 
+    def choose_level(self, largest):
+        return self.np_random.integers(0, int(largest) + 1)
+
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
-        requested_level = self.level if options is None else options.get("level", self.level)
         self._last_response = self._get_simulator().reset(
             seed=1 if seed is None else seed,
-            level=int(requested_level),
+            level=int(self.np_random.choice(self._level_distribution)),
         )
         self._steps = 0
         assert self._last_response.observation.shape == (1160,)
