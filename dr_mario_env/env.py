@@ -99,23 +99,30 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             return np.ones(self.action_space.n, dtype=bool)
         return self._last_response.actions
 
+    COLOR_SYMBOLS = {0: '', 1: '\x1b[1;36m', 2: '\x1b[0;31m', 3: '\x1b[1;33m'}
+    SHAPE_SYMBOLS = {0: ' ', 1: 'x', 2: 'o', 3: '⊃', 4: '⊂'}
     def render(self) -> str:
         if self._last_response is None:
             return "<not reset>"
         values = self._last_response.raw_observation["named"]
+        colors = values["color"]["oneHot"]["indices"]
+        shapes = values["shape"]["oneHot"]["indices"]
+        lookahead = values["lookahead"]["oneHot"]["indices"]
         rows = []
         for row in range(16):
             cells = []
             for column in range(8):
                 offset = row * 8 + column
-                color = values["color"][offset]
-                shape = values["shape"][offset]
-                cells.append("." if color == 3 else f"{color}/{shape}")
+                color = colors[offset]
+                shape = shapes[offset]
+                cells.append(self.COLOR_SYMBOLS[color] + self.SHAPE_SYMBOLS[shape])
             rows.append(" ".join(cells))
+        rows.append(f"      {self.COLOR_SYMBOLS[lookahead[0]+1]}{self.SHAPE_SYMBOLS[4]} {self.COLOR_SYMBOLS[lookahead[1]+1]}{self.SHAPE_SYMBOLS[3]}")
+        rows.reverse()
+        rows += ["\x1b[0m"] * 5
         rendered = "\n".join(rows)
-        if self.render_mode == "ansi":
-            return rendered
-        print(rendered)
+        if self.render_mode == "human":
+            print(rendered)
         return rendered
 
     def close(self) -> None:

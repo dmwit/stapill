@@ -22,9 +22,9 @@ def main() -> None:
     try:
         model = MaskablePPO("MlpPolicy", env, verbose=1)
         model.learn(total_timesteps=args.timesteps)
-        model.save(args.output)
     finally:
-        env.close()
+        try: model.save(args.output)
+        finally: env.close()
 
 
 if __name__ == "__main__":
