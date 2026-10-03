@@ -43,9 +43,12 @@ class SimulatorClient:
             bufsize=1, # line buffered
         )
 
-    def request(self, kind: str, body: dict[str, Any]) -> dict[str, Any]:
+    def _send(self, kind: str, body: dict[str, Any]):
         self._process.stdin.write(json.dumps({kind: body}) + "\n")
         self._process.stdin.flush()
+
+    def request(self, kind: str, body: dict[str, Any]) -> dict[str, Any]:
+        self._send(kind, body)
         line = self._process.stdout.readline()
         if not line:
             code = self._process.poll()
@@ -62,13 +65,9 @@ class SimulatorClient:
         return self._reply_from_dict(self.request("step", {"action": action}))
 
     def close(self) -> None:
-        if self._process.poll() is not None:
-            return
-        try:
-            self._process.stdin.write(json.dumps({"close": []}) + "\n")
-            self._process.stdin.flush()
-        finally:
-            self._process.wait(timeout=2)
+        if self._process.poll() is not None: return
+        try: self._send("close", [])
+        finally: self._process.wait(timeout=2)
 
     def __enter__(self) -> "SimulatorClient":
         return self
