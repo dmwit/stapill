@@ -19,6 +19,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Functor ((<&>))
+import Data.Int (Int64)
 import Data.Maybe (fromJust)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
@@ -27,7 +28,7 @@ import qualified Data.Map as M
 import Data.Text (Text)
 import Data.Vector (Vector)
 import qualified Data.Vector as V
-import Data.Word (Word32, Word64)
+import Data.Word (Word32)
 
 import Dr.Mario.Model
 import Dr.Mario.Pathfinding
@@ -40,7 +41,7 @@ import System.Random.MWC (GenIO, Uniform, uniformM, uniformRM)
 import qualified System.Random.MWC as MWC
 
 data Request
-  = RequestReset { resetSeed :: !Word64, resetLevel :: !Int }
+  = RequestReset { resetSeed :: !Int64, resetLevel :: !Int }
   | RequestStep { stepAction :: !Int }
   | RequestClose
   deriving (Eq, Ord, Read, Show)
@@ -142,7 +143,7 @@ main = do
       where
       mp_ = parseAction action
 
-newSimState :: Word64 -> Int -> IO SimState
+newSimState :: Int64 -> Int -> IO SimState
 newSimState seed level = do
   gameRNG <- splitSeed seed (BS8.pack "level")
   playerRNG <- splitSeed seed (BS8.pack "moves")
@@ -276,13 +277,13 @@ countEmpties board pos = mget board pos >>= \case
 true1 :: Bool -> Double
 true1 b = if b then 1 else 0
 
-splitSeed :: Word64 -> BS.ByteString -> IO GenIO
+splitSeed :: Int64 -> BS.ByteString -> IO GenIO
 splitSeed n tag = do
-  gen <- MWC.initialize . bsToWord32s . hash $ word64ToByteString n <> tag
+  gen <- MWC.initialize . bsToWord32s . hash $ int64ToByteString n <> tag
   gen <$ replicateM_ 128 (uniformM @Int gen)
 
-word64ToByteString :: Word64 -> BS.ByteString
-word64ToByteString = BS.pack . map fromIntegral . take 8 . iterate (`shiftR` 8)
+int64ToByteString :: Int64 -> BS.ByteString
+int64ToByteString = BS.pack . map fromIntegral . take 8 . iterate (`shiftR` 8)
 
 bsToWord32s :: BS.ByteString -> Vector Word32
 bsToWord32s bs = V.generate ((BS.length bs + 3) `shiftR` 2) \i_ -> let i = i_ `shiftL` 2 in

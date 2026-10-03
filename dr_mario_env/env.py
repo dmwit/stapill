@@ -70,7 +70,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
         self._last_response = self._get_simulator().reset(
-            seed=1 if seed is None else seed,
+            seed=int(self.np_random.integers(-2**63, 2**63)) if seed is None else seed,
             level=int(self.np_random.choice(self._level_distribution)),
         )
         self._steps = 0
