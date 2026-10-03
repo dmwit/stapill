@@ -19,9 +19,8 @@ def main() -> None:
     args = parser.parse_args()
 
     env = make_vec_env(lambda: DrMarioEnv(level_distribution=args.level_distribution, max_steps=args.max_steps), 8, vec_env_cls=SubprocVecEnv)
-    try:
-        model = MaskablePPO("MlpPolicy", env, verbose=1)
-        model.learn(total_timesteps=args.timesteps)
+    model = MaskablePPO("MlpPolicy", env, verbose=1, policy_kwargs=dict(net_arch=[1024]*8))
+    try: model.learn(total_timesteps=args.timesteps)
     finally:
         try: model.save(args.output)
         finally: env.close()
