@@ -6,6 +6,8 @@ import argparse
 
 from dr_mario_env import DrMarioEnv
 from sb3_contrib import MaskablePPO
+from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
 
 def main() -> None:
@@ -16,7 +18,7 @@ def main() -> None:
     parser.add_argument("--output", default="dr_mario_maskable_ppo")
     args = parser.parse_args()
 
-    env = DrMarioEnv(level_distribution=args.level_distribution, max_steps=args.max_steps)
+    env = make_vec_env(lambda: DrMarioEnv(level_distribution=args.level_distribution, max_steps=args.max_steps), 8, vec_env_cls=SubprocVecEnv)
     try:
         model = MaskablePPO("MlpPolicy", env, verbose=1)
         model.learn(total_timesteps=args.timesteps)
