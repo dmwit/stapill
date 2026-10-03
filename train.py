@@ -16,10 +16,14 @@ def main() -> None:
     parser.add_argument("--level-distribution", type=int, nargs='+', default=[0])
     parser.add_argument("--max-steps", type=int, default=512)
     parser.add_argument("--output", default="dr_mario_maskable_ppo")
+    parser.add_argument("--input")
     args = parser.parse_args()
 
     env = make_vec_env(lambda: DrMarioEnv(level_distribution=args.level_distribution, max_steps=args.max_steps), 8, vec_env_cls=SubprocVecEnv)
-    model = MaskablePPO("MlpPolicy", env, verbose=1, policy_kwargs=dict(net_arch=[1024]*8))
+    if args.input is None:
+        model = MaskablePPO("MlpPolicy", env, verbose=1, policy_kwargs=dict(net_arch=[1024]*8))
+    else: model = MaskablePPO.load(args.input, env)
+
     try: model.learn(total_timesteps=args.timesteps)
     finally:
         try: model.save(args.output)
