@@ -34,15 +34,15 @@ handles the Gymnasium and Stable-Baselines3 integration.
 
 ## Rewards
 
-- [ ] Make reward components independently configurable.
-- [ ] Reward newly cleared non-virus pieces.
-- [ ] Reward useful horizontal and vertical same-color alignments without repeatedly rewarding unchanged structure.
-- [ ] Reward viruses cleared.
-- [ ] Give the largest positive reward for clearing the level.
-- [ ] Penalize losing heavily.
-- [ ] Penalize total simulated transition time, including pill movement and cleanup/gravity frames.
-- [ ] Report every reward component and frame count in `info`.
-- [ ] Leave an extension point for rewards supplied by an existing Haskell AI/evaluator.
+- [x] Make reward components independently configurable.
+- [x] Reward newly cleared non-virus pieces.
+- [x] Reward useful horizontal and vertical same-color alignments without repeatedly rewarding unchanged structure.
+- [x] Reward viruses cleared.
+- [x] Give the largest positive reward for clearing the level.
+- [x] Penalize losing heavily.
+- [x] Penalize total simulated transition time, including pill movement and cleanup/gravity frames.
+- [x] Report every reward component and frame count in `info`.
+- [x] Leave an extension point for rewards supplied by an existing Haskell AI/evaluator.
 
 Use ordinary action-based discounting initially. The time penalty is a reward
 term, not frame-based discounting.
@@ -70,7 +70,10 @@ term, not frame-based discounting.
 
 ## Later
 
-- [ ] Add variable virus levels and speed progression.
+- [x] Add variable virus levels and speed progression.
 - [ ] Investigate exact frame-based discounting if action-based discounting is insufficient.
 - [ ] Add two-player mechanics, garbage, and self-play.
 - [ ] Compare architecture 1 with deeper pill conditioning and color-pair-specific output heads.
+- [ ] Color-permutation training augmentation.
+- [ ] Add a convolutional net in parallel to the existing net architecture.
+- [ ] Experiment with different reward weightings.
