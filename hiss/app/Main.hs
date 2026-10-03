@@ -3,10 +3,12 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Main (main) where
 
 import Control.Applicative (liftA2)
+import Control.Monad (replicateM_)
 
 import Crypto.Hash.SHA256 (hash)
 
@@ -275,7 +277,9 @@ true1 :: Bool -> Double
 true1 b = if b then 1 else 0
 
 splitSeed :: Word64 -> BS.ByteString -> IO GenIO
-splitSeed n tag = MWC.initialize . bsToWord32s . hash $ word64ToByteString n <> tag
+splitSeed n tag = do
+  gen <- MWC.initialize . bsToWord32s . hash $ word64ToByteString n <> tag
+  gen <$ replicateM_ 128 (uniformM @Int gen)
 
 word64ToByteString :: Word64 -> BS.ByteString
 word64ToByteString = BS.pack . map fromIntegral . take 8 . iterate (`shiftR` 8)
