@@ -35,7 +35,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         self.render_mode = render_mode
         self.action_space = spaces.Discrete(8 * 16 * 4) # columns x rows x rotations
         self.observation_space = spaces.Box(
-            low=0.0, high=1.0, shape=(1160,), dtype=np.float32
+            low=0.0, high=1.0, shape=(1155,), dtype=np.float32
         )
         # not public because we maintain a non-emptiness invariant
         self._level_distribution = level_distribution if level_distribution else [0]
@@ -74,7 +74,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             level=int(self.np_random.choice(self._level_distribution)),
         )
         self._steps = 0
-        assert self._last_response.observation.shape == (1160,)
+        assert self._last_response.observation.shape == (1155,)
         return self._last_response.observation, {}
 
     def step(

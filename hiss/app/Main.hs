@@ -20,6 +20,7 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Functor ((<&>))
 import Data.Int (Int64)
+import Data.List (findIndex, nub, (\\))
 import Data.Maybe (fromJust)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
@@ -59,8 +60,8 @@ data ImmutableState = ImmutableState
 
 data SimState = SimState
   { simBoard :: IOBoard
-  , simPillRNG :: GenIO
-  , simMoveRNG :: GenIO
+  , simGameRNG :: GenIO
+  , simPlayerRNG :: GenIO
   , simOther :: IORef ImmutableState
   }
 
@@ -163,8 +164,8 @@ newSimState seed level = do
     }
   let sim = SimState
         { simBoard = board
-        , simPillRNG = gameRNG
-        , simMoveRNG = playerRNG
+        , simGameRNG = gameRNG
+        , simPlayerRNG = playerRNG
         , simOther = other
         }
   sim <$ simReachable sim
@@ -181,7 +182,7 @@ stepSimState :: SimState -> Pill -> MidPath -> IO SimStepResults
 stepSimState sim pill path = do
   imm <- readIORef (simOther sim)
   details <- mplaceDetails (simBoard sim) pill
-  lk <- uniformM (simPillRNG sim)
+  lk <- uniformM (simGameRNG sim)
 
   let cleanup = summarizeClearResults <$> details
       dframes = mpPathLength path + interControlFrameCost
@@ -222,7 +223,7 @@ validateAction sim mp = do
       pillify (mp', path) = (pill mp, pill mp', path)
   pillify <$> case HM.lookup mp paths of
     Just path -> pure (mp, path)
-    Nothing -> (HM.toList paths !!) <$> uniformRM (0, HM.size paths - 1) (simMoveRNG sim)
+    Nothing -> (HM.toList paths !!) <$> uniformRM (0, HM.size paths - 1) (simPlayerRNG sim)
 
 actionRewards :: SimState -> Pill -> Pill -> IO (HashMap Text Double)
 actionRewards sim reqPill pill = do
@@ -306,49 +307,61 @@ parseAction n = MidPlacement
 observe :: SimState -> IO Tensors
 observe sim = TensorsNamed . HM.fromList <$> traverse sequence
   [ ("shape", observeShape (simBoard sim))
-  , ("color", observeColor (simBoard sim))
-  , ("lookahead", observeLookahead (simOther sim))
-  , ("gravity", observeGravity (simOther sim))
+  , ("color", observeColor sim)
+  , ("other", TensorsScalars . mconcat <$> sequence
+    [ observeDouble (simOther sim)
+    , observeGravity (simOther sim)
+    ])
   ]
 
-observeColor :: HasCallStack => IOBoard -> IO Tensors
-observeColor b = do
-  is <- V.generateM positionCount \i -> fst . ppMCell <$> mget b (parsePosition i)
+observeColor :: HasCallStack => SimState -> IO Tensors
+observeColor sim = do
+  -- Build the color permutation: left pill half is 1, right pill half is 2,
+  -- last color is 3. Doubles rerandomize the right half.
+  lk <- immLookahead <$> readIORef (simOther sim)
+  let pillColors = nub [leftColor lk, rightColor lk]
+      otherColors = [minBound..maxBound] \\ pillColors
+  swap <- uniformM (simGameRNG sim)
+  let permutation = mkPermutation (pillColors ++ (if swap then reverse else id) otherColors)
+
+  is <- V.generateM positionCount \i -> ppColor permutation <$> mget (simBoard sim) (parsePosition i)
   pure TensorsOneHot
     { indexCount = indexCountMaybe indexCountColor
     , indices = is
     }
 
+-- memoized `flip findIndex`
+mkPermutation :: HasCallStack => [Color] -> Color -> Int
+mkPermutation cs = \case {Blue -> blue; Red -> red; Yellow -> yellow} where
+  [blue, red, yellow] = [1 + fromJust (findIndex (c==) cs) | c <- [Blue, Red, Yellow]]
+
 observeShape :: HasCallStack => IOBoard -> IO Tensors
 observeShape b = do
-  is <- V.generateM positionCount \i -> snd . ppMCell <$> mget b (parsePosition i)
+  is <- V.generateM positionCount \i -> ppShape <$> mget b (parsePosition i)
   pure TensorsOneHot
     { indexCount = indexCountMaybe indexCountShape
     , indices = is
     }
 
-ppMCell :: HasCallStack => Maybe Cell -> (Int, Int)
-ppMCell = ppCell . fromJust
+ppMCell :: HasCallStack => (OCell -> Int) -> Maybe Cell -> Int
+ppMCell f = maybe (error "cannot pretty-print missing (out-of-bounds) cell") (maybe 0 f . toOCell)
 
-ppCell :: Cell -> (Int, Int)
-ppCell = \case
-  Empty -> (0, 0)
-  Occupied c s -> (1 + indexColor c, 1 + indexShape s)
+ppColor :: HasCallStack => (Color -> Int) -> Maybe Cell -> Int
+ppColor permutation = ppMCell (permutation . ocolor)
 
-observeLookahead :: IORef ImmutableState -> IO Tensors
-observeLookahead ref = ppLookahead . immLookahead <$> readIORef ref
+ppShape :: HasCallStack => Maybe Cell -> Int
+ppShape = ppMCell (succ . indexShape . oshape)
 
-ppLookahead :: Lookahead -> Tensors
-ppLookahead lk = TensorsOneHot
-  { indexCount = indexCountColor
-  , indices = V.fromListN 2 [indexColor (leftColor lk), indexColor (rightColor lk)]
-  }
+observeDouble :: IORef ImmutableState -> IO (HashMap Text Double)
+observeDouble ref = do
+  lk <- immLookahead <$> readIORef ref
+  pure . HM.singleton "double" . fromIntegral . fromEnum $ leftColor lk == rightColor lk
 
-observeGravity :: IORef ImmutableState -> IO Tensors
+observeGravity :: IORef ImmutableState -> IO (HashMap Text Double)
 observeGravity ref = readIORef ref <&> \imm -> ppGravity (gravity (immCoarseSpeed imm) (immPillsUsed imm))
 
-ppGravity :: Int -> Tensors
-ppGravity n = TensorsScalars $ HM.fromList
+ppGravity :: Int -> (HashMap Text Double)
+ppGravity n = HM.fromList
   [ ("superframe/row", fromIntegral n / 40)
   , ("row/frame", recip (fromIntegral n))
   ]
@@ -358,12 +371,6 @@ indexCountMaybe = succ
 
 indexCountColor :: Int
 indexCountColor = 3
-
-indexColor :: Color -> Int
-indexColor = \case
-  Blue -> 0
-  Red -> 1
-  Yellow -> 2
 
 indexCountShape :: Int
 indexCountShape = 4
