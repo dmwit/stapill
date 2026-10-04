@@ -77,3 +77,6 @@ term, not frame-based discounting.
 - [ ] Color-permutation training augmentation.
 - [ ] Add a convolutional net in parallel to the existing net architecture.
 - [ ] Experiment with different reward weightings.
+- [ ] Color invariance: make observations be lookahead-relative, with a bit for double pills.
+- [ ] CNN-ify the policy/value network.
+- [ ] Maybe pathfinding is a speed bottleneck. We could schedule it at action time, but only wait for it to finish at action-mask query time. Needs benchmark.
