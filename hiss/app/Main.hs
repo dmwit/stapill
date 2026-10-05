@@ -386,12 +386,12 @@ indexShape = \case
   West -> 3
 
 ppPosition :: Position -> Int
-ppPosition pos = x pos + shiftL (y pos) 3
+ppPosition pos = y pos + shiftL (x pos) 4
 
 parsePosition :: Int -> Position
 parsePosition n = Position
-  { x = (n `shiftR` 0) .&. 0x7
-  , y = (n `shiftR` 3) .&. 0xf
+  { x = (n `shiftR` 4) .&. 0x7
+  , y = (n `shiftR` 0) .&. 0xf
   }
 
 instance Uniform Lookahead where uniformM g = liftA2 Lookahead (uniformM g) (uniformM g)
