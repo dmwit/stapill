@@ -79,15 +79,12 @@ deriveJSON strictPrefixOptions { fieldLabelModifier = id } ''Tensors
 
 data Reply
   = ReplyError { errorDescription :: String }
-  | ReplyReset
-    { resetObservation :: Tensors
-    , resetValidActions :: V.Vector Int
-    }
-  | ReplyStep
-    { stepObservation :: Tensors
-    , stepReward :: HashMap Text Double
-    , stepValidActions :: V.Vector Int
-    , stepTerminated :: Bool
+  | ReplySuccess
+    { successObservation :: Tensors
+    , successReward :: HashMap Text Double
+    , successValidActions :: V.Vector Int
+    , successTerminated :: Bool
+    , successColors :: [Color]
     }
   deriving (Eq, Ord, Read, Show)
 
@@ -113,36 +110,34 @@ main = do
       linewise uninit
     RequestReset { resetSeed = seed, resetLevel = level } -> do
       sim <- newSimState seed level
-      observation <- observe sim
-      actions <- actionIndices sim
-      reply ReplyReset
-        { resetObservation = observation
-        , resetValidActions = actions
-        }
-      linewise (running sim)
+      succeed sim HM.empty False
 
   running sim = \case
     RequestClose {} -> pure ()
     req@RequestReset {} -> uninit req
     RequestStep { stepAction = action } -> do
       (requestedPill, actualPill@pill, path) <- validateAction sim mp_
-      rsPre <- actionRewards sim requestedPill actualPill
+      rAction <- actionReward sim requestedPill actualPill
       -- TODO: look for HasCallStack and turn it into an error reply instead of a crash
       result <- stepSimState sim pill path
-      rsPost <- outcomeRewards sim result
-
-      observation <- observe sim
-      actions <- actionIndices sim
-
-      reply ReplyStep
-        { stepObservation = observation
-        , stepReward = rsPre <> rsPost
-        , stepValidActions = actions
-        , stepTerminated = resultWon result || resultLost result
-        }
-      linewise (running sim)
+      succeed sim
+        (rAction <> outcomeReward result)
+        (resultWon result || resultLost result)
       where
       mp_ = parseAction action
+
+  succeed sim reward terminated = do
+    colors <- chooseColorOrder sim
+    observation <- observe sim colors
+    actions <- actionIndices sim
+    reply ReplySuccess
+      { successObservation = observation
+      , successReward = reward
+      , successValidActions = actions
+      , successTerminated = terminated
+      , successColors = colors
+      }
+    linewise (running sim)
 
 newSimState :: Int64 -> Int -> IO SimState
 newSimState seed level = do
@@ -225,8 +220,8 @@ validateAction sim mp = do
     Just path -> pure (mp, path)
     Nothing -> (HM.toList paths !!) <$> uniformRM (0, HM.size paths - 1) (simPlayerRNG sim)
 
-actionRewards :: SimState -> Pill -> Pill -> IO (HashMap Text Double)
-actionRewards sim reqPill pill = do
+actionReward :: SimState -> Pill -> Pill -> IO (HashMap Text Double)
+actionReward sim reqPill pill = do
   horzReward <- sumFor placements \(pos, cell) ->
     sumFor [0..7] \x' -> do
       nearbyCell <- mget (simBoard sim) pos { x = x' }
@@ -251,8 +246,8 @@ actionRewards sim reqPill pill = do
     ]
   sumFor xs f = sum <$> traverse f xs
 
-outcomeRewards :: SimState -> SimStepResults -> IO (HashMap Text Double)
-outcomeRewards _sim result = pure $ HM.fromList
+outcomeReward :: SimStepResults -> HashMap Text Double
+outcomeReward result = HM.fromList
   [ ("frames", fromIntegral (resultFrames result))
   , ("viruses", sum (fromIntegral . clears <$> resultCleanup result))
   , ("halves", sum (fromIntegral . countHalves <$> resultClears result))
@@ -304,36 +299,36 @@ parseAction n = MidPlacement
   , mpRotations = (n `shiftR` 7) .&. 0x3
   }
 
-observe :: SimState -> IO Tensors
-observe sim = TensorsNamed . HM.fromList <$> traverse sequence
+observe :: SimState -> [Color] -> IO Tensors
+observe sim colors = TensorsNamed . HM.fromList <$> traverse sequence
   [ ("shape", observeShape (simBoard sim))
-  , ("color", observeColor sim)
+  , ("color", observeColor (simBoard sim) colors)
   , ("other", TensorsScalars . mconcat <$> sequence
-    [ observeDouble (simOther sim)
+    [ observeDouble sim
     , observeGravity (simOther sim)
     ])
   ]
 
-observeColor :: HasCallStack => SimState -> IO Tensors
-observeColor sim = do
-  -- Build the color permutation: left pill half is 1, right pill half is 2,
-  -- last color is 3. Doubles rerandomize the right half.
-  lk <- immLookahead <$> readIORef (simOther sim)
+-- Build the color permutation: left pill half is 1, right pill half is 2, last
+-- color is 3. Doubles rerandomize the right half.
+chooseColorOrder :: SimState -> IO [Color]
+chooseColorOrder sim = do
+  lk <- simLookahead sim
   let pillColors = nub [leftColor lk, rightColor lk]
       otherColors = [minBound..maxBound] \\ pillColors
   swap <- uniformM (simGameRNG sim)
-  let permutation = mkPermutation (pillColors ++ (if swap then reverse else id) otherColors)
+  pure $ pillColors ++ (if swap then reverse else id) otherColors
 
-  is <- V.generateM positionCount \i -> ppColor permutation <$> mget (simBoard sim) (parsePosition i)
+observeColor :: HasCallStack => IOBoard -> [Color] -> IO Tensors
+observeColor b colors = do
+  is <- V.generateM positionCount \i -> ppColor permutation <$> mget b (parsePosition i)
   pure TensorsOneHot
     { indexCount = indexCountMaybe indexCountColor
     , indices = is
     }
-
--- memoized `flip findIndex`
-mkPermutation :: HasCallStack => [Color] -> Color -> Int
-mkPermutation cs = \case {Blue -> blue; Red -> red; Yellow -> yellow} where
-  [blue, red, yellow] = [1 + fromJust (findIndex (c==) cs) | c <- [Blue, Red, Yellow]]
+  where
+  permutation = \case Blue -> blue; Red -> red; Yellow -> yellow
+  [blue, red, yellow] = [1 + fromJust (findIndex (c==) colors) | c <- [Blue, Red, Yellow]]
 
 observeShape :: HasCallStack => IOBoard -> IO Tensors
 observeShape b = do
@@ -352,10 +347,9 @@ ppColor permutation = ppMCell (permutation . ocolor)
 ppShape :: HasCallStack => Maybe Cell -> Int
 ppShape = ppMCell (succ . indexShape . oshape)
 
-observeDouble :: IORef ImmutableState -> IO (HashMap Text Double)
-observeDouble ref = do
-  lk <- immLookahead <$> readIORef ref
-  pure . HM.singleton "double" . fromIntegral . fromEnum $ leftColor lk == rightColor lk
+observeDouble :: SimState -> IO (HashMap Text Double)
+observeDouble sim = simLookahead sim <&> \lk ->
+  HM.singleton "double" . fromIntegral . fromEnum $ leftColor lk == rightColor lk
 
 observeGravity :: IORef ImmutableState -> IO (HashMap Text Double)
 observeGravity ref = readIORef ref <&> \imm -> ppGravity (gravity (immCoarseSpeed imm) (immPillsUsed imm))
@@ -365,6 +359,9 @@ ppGravity n = HM.fromList
   [ ("superframe/row", fromIntegral n / 40)
   , ("row/frame", recip (fromIntegral n))
   ]
+
+simLookahead :: SimState -> IO Lookahead
+simLookahead sim = immLookahead <$> readIORef (simOther sim)
 
 indexCountMaybe :: Int -> Int
 indexCountMaybe = succ

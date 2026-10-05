@@ -18,6 +18,7 @@ class SimulatorReply:
     actions: np.ndarray
     reward: dict[str, float]
     terminated: bool
+    colors: str
 
     def __eq__(self, other):
         obs_eq = self.raw_observation == other.raw_observation
@@ -27,6 +28,7 @@ class SimulatorReply:
             and np.array_equal(self.actions, other.actions)
             and self.reward == other.reward
             and self.terminated == other.terminated
+            and self.colors == other.colors
             )
 
 class SimulatorClient:
@@ -54,7 +56,7 @@ class SimulatorClient:
             code = self._process.poll()
             raise RuntimeError(f"simulator exited without a response (code {code})")
         response = json.loads(line)
-        try: return response[kind]
+        try: return response["success"]
         except KeyError:
             raise RuntimeError(response.get("error", {}).get("description", "<unknown simulator error>"))
 
@@ -81,8 +83,9 @@ class SimulatorClient:
             raw_observation=raw_observation,
             observation=_flatten_observation(raw_observation),
             actions=_bool_indices(self.action_count, raw["validActions"]),
-            reward=raw.get("reward", {}),
-            terminated=raw.get("terminated", False),
+            reward=raw["reward"],
+            terminated=raw["terminated"],
+            colors=' ' + raw["colors"],
             )
 
 def _flatten_observation(raw: dict[str, Any]) -> np.ndarray:
