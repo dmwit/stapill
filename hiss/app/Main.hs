@@ -41,6 +41,8 @@ import System.IO (BufferMode(LineBuffering), hSetBuffering, stdout)
 import System.Random.MWC (GenIO, Uniform, uniformM, uniformRM)
 import qualified System.Random.MWC as MWC
 
+import Text.Printf (printf)
+
 data Request
   = RequestReset { resetSeed :: !Int64, resetLevel :: !Int }
   | RequestStep { stepAction :: !Int }
@@ -65,22 +67,27 @@ data SimState = SimState
   , simOther :: IORef ImmutableState
   }
 
-data Tensors
-  = TensorsNamed (HashMap Text Tensors)
-  | TensorsScalars (HashMap Text Double)
-  -- | becomes a 2D array of size indexCount x length indices; result[i][j] = i == raw[j]
-  | TensorsOneHot { indexCount :: Int, indices :: V.Vector Int }
-  -- | becomes a 1D array of size indexCount; result[i] = i in indices
-  | TensorsIndices { indexCount :: Int, indices :: V.Vector Int }
-  | TensorsReal (V.Vector Double)
-  deriving (Eq, Ord, Read, Show)
+-- | Represents a 3D tensor of size indexCount x length indices x length (head
+-- indices), where result[i][j][k] = i == indices[j][k].
+data OneHot2D = OneHot2D
+  { oneHot2DIndexCount :: Int
+  , oneHot2DIndices :: V.Vector (V.Vector Int)
+  } deriving (Eq, Ord, Read, Show)
 
-deriveJSON strictPrefixOptions { fieldLabelModifier = id } ''Tensors
+deriveJSON strictPrefixOptions { fieldLabelModifier = stripNWords 4 } ''OneHot2D
+
+data Observation = Observation
+  { observationColor :: OneHot2D
+  , observationShape :: OneHot2D
+  , observationOther :: HashMap Text Double
+  } deriving (Eq, Ord, Read, Show)
+
+deriveJSON strictPrefixOptions ''Observation
 
 data Reply
   = ReplyError { errorDescription :: String }
   | ReplySuccess
-    { successObservation :: Tensors
+    { successObservation :: Observation
     , successReward :: HashMap Text Double
     , successValidActions :: V.Vector Int
     , successTerminated :: Bool
@@ -299,15 +306,17 @@ parseAction n = MidPlacement
   , mpRotations = (n `shiftR` 7) .&. 0x3
   }
 
-observe :: SimState -> [Color] -> IO Tensors
-observe sim colors = TensorsNamed . HM.fromList <$> traverse sequence
-  [ ("shape", observeShape (simBoard sim))
-  , ("color", observeColor (simBoard sim) colors)
-  , ("other", TensorsScalars . mconcat <$> sequence
-    [ observeDouble sim
-    , observeGravity (simOther sim)
-    ])
-  ]
+observe :: SimState -> [Color] -> IO Observation
+observe sim colors = do
+  oShape <- observeShape (simBoard sim)
+  oColor <- observeColor (simBoard sim) colors
+  oDouble <- observeDouble sim
+  oGravity <- observeGravity (simOther sim)
+  pure Observation
+    { observationShape = oShape
+    , observationColor = oColor
+    , observationOther = oDouble <> oGravity
+    }
 
 -- Build the color permutation: left pill half is 1, right pill half is 2, last
 -- color is 3. Doubles rerandomize the right half.
@@ -319,33 +328,31 @@ chooseColorOrder sim = do
   swap <- uniformM (simGameRNG sim)
   pure $ pillColors ++ (if swap then reverse else id) otherColors
 
-observeColor :: HasCallStack => IOBoard -> [Color] -> IO Tensors
-observeColor b colors = do
-  is <- V.generateM positionCount \i -> ppColor permutation <$> mget b (parsePosition i)
-  pure TensorsOneHot
-    { indexCount = indexCountMaybe indexCountColor
-    , indices = is
+observeColor :: HasCallStack => IOBoard -> [Color] -> IO OneHot2D
+observeColor b colors = observeBoard b indexCountColor (indexColor . ocolor) where
+  indexColor = \case Blue -> blue; Red -> red; Yellow -> yellow
+  [blue, red, yellow] = [fromJust (findIndex (c==) colors) | c <- [Blue, Red, Yellow]]
+
+observeShape :: HasCallStack => IOBoard -> IO OneHot2D
+observeShape b = observeBoard b indexCountShape (indexShape . oshape)
+
+-- | The given function should return nonnegative 'Int's in the range [0,
+-- arg2). The Observation produced will be a 'OneHot2D' with 0 for empties.
+observeBoard :: HasCallStack => IOBoard -> Int -> (OCell -> Int) -> IO OneHot2D
+observeBoard b count f = do
+  values <- V.generateM nesWidth \bx ->
+    V.generateM nesHeight \by ->
+      mget b (Position bx by) >>= \case
+        Nothing -> fail . printf "board was too small, expected %dx%d, saw\n%s" nesWidth nesHeight =<< mppST b
+        Just Empty -> pure 0
+        Just (Occupied c s) -> pure . succ $ f (OCell c s)
+  pure OneHot2D
+    { oneHot2DIndexCount = succ count
+    , oneHot2DIndices = values
     }
   where
-  permutation = \case Blue -> blue; Red -> red; Yellow -> yellow
-  [blue, red, yellow] = [1 + fromJust (findIndex (c==) colors) | c <- [Blue, Red, Yellow]]
-
-observeShape :: HasCallStack => IOBoard -> IO Tensors
-observeShape b = do
-  is <- V.generateM positionCount \i -> ppShape <$> mget b (parsePosition i)
-  pure TensorsOneHot
-    { indexCount = indexCountMaybe indexCountShape
-    , indices = is
-    }
-
-ppMCell :: HasCallStack => (OCell -> Int) -> Maybe Cell -> Int
-ppMCell f = maybe (error "cannot pretty-print missing (out-of-bounds) cell") (maybe 0 f . toOCell)
-
-ppColor :: HasCallStack => (Color -> Int) -> Maybe Cell -> Int
-ppColor permutation = ppMCell (permutation . ocolor)
-
-ppShape :: HasCallStack => Maybe Cell -> Int
-ppShape = ppMCell (succ . indexShape . oshape)
+  nesWidth = 8
+  nesHeight = 16
 
 observeDouble :: SimState -> IO (HashMap Text Double)
 observeDouble sim = simLookahead sim <&> \lk ->
@@ -362,9 +369,6 @@ ppGravity n = HM.fromList
 
 simLookahead :: SimState -> IO Lookahead
 simLookahead sim = immLookahead <$> readIORef (simOther sim)
-
-indexCountMaybe :: Int -> Int
-indexCountMaybe = succ
 
 indexCountColor :: Int
 indexCountColor = 3
@@ -389,9 +393,6 @@ parsePosition n = Position
   { x = (n `shiftR` 0) .&. 0x7
   , y = (n `shiftR` 3) .&. 0xf
   }
-
-positionCount :: Int
-positionCount = 8*16
 
 instance Uniform Lookahead where uniformM g = liftA2 Lookahead (uniformM g) (uniformM g)
 instance Uniform Color where uniformM g = toEnum <$> uniformRM (0, 2) g

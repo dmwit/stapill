@@ -1,4 +1,4 @@
-module JSONTH (stripFirstWord, strictPrefixOptions) where
+module JSONTH (stripFirstWord, stripNWords, strictPrefixOptions) where
 
 import Data.Aeson
 import Data.Char (isLower, toLower)
@@ -15,6 +15,9 @@ stripFirstWord s = case span isLower (drop 1 s) of
   -- resulting JSON.
   (_, "") -> printf "ERROR: stripFirstWord used on name \"%s\", which has no second word\n%s"
     s (prettyCallStack callStack)
+
+stripNWords :: HasCallStack => Int -> String -> String
+stripNWords n s = iterate stripFirstWord s !! n
 
 strictPrefixOptions :: Options
 strictPrefixOptions = defaultOptions
