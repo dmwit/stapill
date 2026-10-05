@@ -14,9 +14,28 @@ if __name__ == "__main__":
     env = DrMarioEnv(level_distribution=args.level_distribution, render_mode="human")
     model = MaskablePPO.load(args.input, env)
     terminated = True
+
     while True:
-        if terminated: obs, _ = env.reset()
+        if terminated:
+            obs, _ = env.reset()
+
+            try:
+                print(f"total steps before termination: {steps}")
+                print('='*30)
+            except NameError: pass
+
+            cumulative_reward = 0
+            cumulative_gamma = 1
+            steps = 0
+
         action, _ = model.predict(obs)
-        obs, _, terminated, _, _ = env.step(action)
+        obs, reward, terminated, _truncated, _info = env.step(action)
         env.render()
+
+        cumulative_reward += cumulative_gamma * reward
+        cumulative_gamma *= model.gamma
+        print(f"non-discounted reward for this step: {reward}")
+        print(f"cumulative discounted reward so far this episode: {cumulative_reward}")
+        print('\n'*3)
+
         time.sleep(1/args.fps)

@@ -121,7 +121,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             rows.append(" ".join(cells))
         rows.append(f"      {self.COLOR_SYMBOLS[lkl]}{self.SHAPE_SYMBOLS[4]} {self.COLOR_SYMBOLS[lkr]}{self.SHAPE_SYMBOLS[3]}")
         rows.reverse()
-        rows += ["\x1b[0m"] * 5
+        rows += ["\x1b[0m"]
         rendered = "\n".join(rows)
         if self.render_mode == "human":
             print(rendered)
