@@ -33,16 +33,16 @@ if __name__ == "__main__":
             cumulative_gamma = 1
             steps = 0
 
-        action, _ = model.predict(obs)
+        action, _ = model.predict(obs, action_masks=env.action_masks())
         obs, reward, terminated, _truncated, _info = env.step(action)
         env.render()
 
         cumulative_reward += cumulative_gamma * reward
         cumulative_gamma *= model.gamma
         steps += 1
+        print(f"cumulative discounted reward so far this episode: {cumulative_reward}")
         print(f"non-discounted reward for this step: {reward}")
         print(f"\t{env._last_response.reward}")
-        print(f"cumulative discounted reward so far this episode: {cumulative_reward}")
         print('\n'*3)
 
         time.sleep(1/args.fps)
