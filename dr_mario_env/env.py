@@ -46,10 +46,10 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             "invalid": -10,
             "chasm": -0.1/16,
             "frames": -0.01/100,
-            "viruses": 100,
-            "halves": 3,
-            "win": 1000,
-            "lose": -1000,
+            "viruses": 10_000,
+            "halves": 100,
+            "win": 1_000_000,
+            "lose": 0,
             }
 
     def _get_simulator(self) -> SimulatorClient:
