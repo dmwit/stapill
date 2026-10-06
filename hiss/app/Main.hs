@@ -232,11 +232,11 @@ actionReward sim reqPill pill = do
   horzReward <- sumFor placements \(pos, cell) ->
     sumFor [0..7] \x' -> do
       nearbyCell <- mget (simBoard sim) pos { x = x' }
-      pure $ if nearbyCell == Just cell then 0.5 ^^ abs (x' - x pos) else 0
+      pure $ if (nearbyCell >>= color) == color cell then 0.5 ^^ abs (x' - x pos) else 0
   vertReward <- sumFor placements \(pos, cell) ->
     sumFor [0..15] \y' -> do
       nearbyCell <- mget (simBoard sim) pos { y = y' }
-      pure $ if nearbyCell == Just cell then 0.5 ^^ abs (y' - y pos) else 0
+      pure $ if (nearbyCell >>= color) == color cell then 0.5 ^^ abs (y' - y pos) else 0
   chasm <- case orientation (content pill) of
     Vertical -> pure 0
     Horizontal -> sumFor placements \(pos, _) -> countEmpties (simBoard sim) (unsafeMove down pos)
