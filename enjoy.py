@@ -29,7 +29,8 @@ if __name__ == "__main__":
                 print('='*30)
             except NameError: pass
 
-            cumulative_reward = 0
+            cumulative_discounted_reward = 0
+            cumulative_absolute_reward = 0
             cumulative_gamma = 1
             steps = 0
 
@@ -37,10 +38,12 @@ if __name__ == "__main__":
         obs, reward, terminated, _truncated, _info = env.step(action)
         env.render()
 
-        cumulative_reward += cumulative_gamma * reward
+        cumulative_discounted_reward += cumulative_gamma * reward
+        cumulative_absolute_reward += reward
         cumulative_gamma *= model.gamma
         steps += 1
-        print(f"cumulative discounted reward so far this episode: {cumulative_reward}")
+        print(f"cumulative discounted reward so far this episode: {cumulative_discounted_reward}")
+        print(f"cumulative non-discounted reward so far this episode: {cumulative_absolute_reward}")
         print(f"non-discounted reward for this step: {reward}")
         print(f"\t{env._last_response.reward}")
         print('\n'*3)
