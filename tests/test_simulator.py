@@ -1,7 +1,6 @@
 import unittest
 import sys
-open('/tmp/pytest_path.txt', 'w').write(str(sys.path))
-from dr_mario_env import SimulatorClient
+from dr_mario_env import DrMarioEnv, SimulatorClient
 
 
 class SimulatorProtocolTests(unittest.TestCase):
@@ -11,7 +10,7 @@ class SimulatorProtocolTests(unittest.TestCase):
             second = sim.reset(seed=7, level=0)
 
         self.assertEqual(first, second)
-        self.assertEqual(len(first.observation), 1160)
+        self.assertEqual(DrMarioEnv().reset()[0].shape, (14, 8, 16))
         self.assertEqual(len(first.actions), 512)
         self.assertTrue(any(first.actions))
 

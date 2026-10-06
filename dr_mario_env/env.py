@@ -2,25 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
-
+import gymnasium as gym
 import numpy as np
 
-try:
-    import gymnasium as gym
-    from gymnasium import spaces
-except ImportError as exc:  # pragma: no cover - exercised when optional deps are absent
-    raise ImportError(
-        "DrMarioEnv requires gymnasium; install the Python RL dependencies first"
-    ) from exc
-
-from .simulator import SimulatorClient
+from typing import Any, Sequence
+from gymnasium import spaces
+from .simulator import SimulatorClient, SimulatorReply
 
 
 class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
     """One placement decision per environment step."""
 
     metadata = {"render_modes": ["ansi"]}
+    # 14 = 4 colors + 5 shapes + 3 others + 2 positions
+    OBSERVATION_SHAPE = (14, 8, 16)
 
     def __init__(
         self,
@@ -35,14 +30,14 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         self.render_mode = render_mode
         self.action_space = spaces.Discrete(8 * 16 * 4) # columns x rows x rotations
         self.observation_space = spaces.Box(
-            low=0.0, high=1.0, shape=(1155,), dtype=np.float32
+            low=0.0, high=1.0, shape=self.OBSERVATION_SHAPE, dtype=np.float32
         )
         # not public because we maintain a non-emptiness invariant
         self._level_distribution = level_distribution if level_distribution else [0]
         self._simulator_command = simulator_command
         self._simulator: SimulatorClient | None = None
         self._steps = 0
-        self._last_response: dict[str, Any] | None = None
+        self._last_response: SimulatorReply | None = None
 
         if reward_weights is not None: self.reward_weights = reward_weights
         else: self.reward_weights = {
@@ -62,9 +57,6 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             self._simulator = SimulatorClient(self.action_space.n, self._simulator_command)
         return self._simulator
 
-    def choose_level(self, largest):
-        return self.np_random.integers(0, int(largest) + 1)
-
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
     ) -> tuple[np.ndarray, dict[str, Any]]:
@@ -74,8 +66,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             level=int(self.np_random.choice(self._level_distribution)),
         )
         self._steps = 0
-        assert self._last_response.observation.shape == (1155,)
-        return self._last_response.observation, {}
+        return self.observe(), {}
 
     def step(
         self, action: np.int64 | int
@@ -87,8 +78,8 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         truncated = self._steps >= self.max_steps and not response.terminated
         self._last_response = response
         return (
-            response.observation,
-            self._weight_rewards(response.reward),
+            self.observe(),
+            self.reward(),
             response.terminated,
             truncated,
             response.reward,
@@ -104,19 +95,18 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
     def render(self) -> str:
         if self._last_response is None:
             return "<not reset>"
-        values = self._last_response.raw_observation["named"]
+        raw = self._last_response.raw_observation
         color_order = self._last_response.colors
-        colors = values["color"]["oneHot"]["indices"]
-        shapes = values["shape"]["oneHot"]["indices"]
+        colors = raw["color"]["indices"]
+        shapes = raw["shape"]["indices"]
         lkl = color_order[1]
-        lkr = color_order[1] if values["other"]["scalars"]["double"] else color_order[2]
+        lkr = color_order[1] if raw["other"]["double"] else color_order[2]
         rows = []
         for row in range(16):
             cells = []
             for column in range(8):
-                offset = row * 8 + column
-                color = color_order[colors[offset]]
-                shape = shapes[offset]
+                color = color_order[colors[column][row]]
+                shape = shapes[column][row]
                 cells.append(self.COLOR_SYMBOLS[color] + self.SHAPE_SYMBOLS[shape])
             rows.append(" ".join(cells))
         rows.append(f"      {self.COLOR_SYMBOLS[lkl]}{self.SHAPE_SYMBOLS[4]} {self.COLOR_SYMBOLS[lkr]}{self.SHAPE_SYMBOLS[3]}")
@@ -132,8 +122,32 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             self._simulator.close()
             self._simulator = None
 
-    def _weight_rewards(self, rewards):
-        reward = 0
-        for k, v in self.reward_weights.items():
-            reward += rewards[k] * v
-        return reward
+    def observe(self):
+        observation = self._last_response.observation
+        board_shape = observation.color.shape[1:]
+        other = np.broadcast_to(
+            np.array(
+                [[[obs]] for _, obs in sorted(observation.other.items())],
+                dtype=np.float32,
+                ),
+            (len(observation.other),) + board_shape,
+            )
+        xs = _coordinate_plane(board_shape, 0)
+        ys = _coordinate_plane(board_shape, 1)
+        return np.concatenate([observation.color, observation.shape, other, xs, ys])
+
+    def reward(self):
+        return sum(self._last_response.reward[k] * w for k, w in self.reward_weights.items())
+
+def _coordinate_plane(board_shape, axis):
+    result_shape = [1 for _ in board_shape]
+    result_shape[axis] = board_shape[axis]
+    result_shape = [1] + result_shape
+
+    return np.broadcast_to(
+        np.reshape(
+            np.linspace(0, 1, board_shape[axis], endpoint=False, dtype=np.float32),
+            result_shape,
+            ),
+        (1,) + board_shape,
+        )

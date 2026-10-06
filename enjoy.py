@@ -9,7 +9,12 @@ if __name__ == "__main__":
     parser.add_argument("--level-distribution", type=int, nargs='+', default=[0])
     parser.add_argument("--fps", type=float, default=1)
     parser.add_argument("--input", default="dr_mario_maskable_ppo")
+    parser.add_argument("--disable-cudnn", default=True)
     args = parser.parse_args()
+
+    if args.disable_cudnn:
+        import torch
+        torch.backends.cudnn.enabled = False
 
     env = DrMarioEnv(level_distribution=args.level_distribution, render_mode="human")
     model = MaskablePPO.load(args.input, env)
@@ -34,7 +39,9 @@ if __name__ == "__main__":
 
         cumulative_reward += cumulative_gamma * reward
         cumulative_gamma *= model.gamma
+        steps += 1
         print(f"non-discounted reward for this step: {reward}")
+        print(f"\t{env._last_response.reward}")
         print(f"cumulative discounted reward so far this episode: {cumulative_reward}")
         print('\n'*3)
 

@@ -5,16 +5,29 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import numpy as np
-import os
-from pathlib import Path
 import subprocess
 from typing import Any, Sequence
+
+#from .observation import encode_observation
+
+@dataclass
+class Observation:
+    color: np.ndarray # 4x8x16
+    shape: np.ndarray # 5x8x16
+    other: dict[str, float]
+
+    def __eq__(self, other):
+        return (True
+            and np.array_equal(self.color, other.color)
+            and np.array_equal(self.shape, other.shape)
+            and self.other == other.other
+            )
 
 @dataclass
 class SimulatorReply:
     """Info that the simulator returns."""
     raw_observation: dict[str, Any]
-    observation: np.ndarray
+    observation: Observation
     actions: np.ndarray
     reward: dict[str, float]
     terminated: bool
@@ -22,7 +35,7 @@ class SimulatorReply:
 
     def __eq__(self, other):
         obs_eq = self.raw_observation == other.raw_observation
-        if obs_eq: assert np.array_equal(self.observation, other.observation)
+        if obs_eq: assert self.observation == other.observation
         return (True
             and obs_eq
             and np.array_equal(self.actions, other.actions)
@@ -81,46 +94,31 @@ class SimulatorClient:
         raw_observation = raw["observation"]
         return SimulatorReply(
             raw_observation=raw_observation,
-            observation=_flatten_observation(raw_observation),
+            observation=decode_observation(raw_observation),
             actions=_bool_indices(self.action_count, raw["validActions"]),
             reward=raw["reward"],
             terminated=raw["terminated"],
             colors=' ' + raw["colors"],
             )
 
-def _flatten_observation(raw: dict[str, Any]) -> np.ndarray:
-    helpers = {
-        "named": _flatten_named,
-        "scalars": _flatten_scalars,
-        "oneHot": _flatten_one_hot,
-        "indices": _flatten_indices,
-        "real": _flatten_real,
-        }
-    assert len(raw) == 1
-    for (style, body) in raw.items():
-        return helpers[style](body)
-
-def _flatten_named(children: dict[str, Any]) -> np.ndarray:
-    return np.concatenate([_flatten_observation(child) for (_, child) in sorted(children.items())], dtype=np.float32)
-
-def _flatten_scalars(scalars: dict[str, float]) -> np.ndarray:
-    return np.array([v for (_, v) in sorted(scalars.items())], dtype=np.float32)
-
-def _flatten_one_hot(body: dict[str, int | list[int]]) -> np.ndarray:
-    result = np.zeros((body["indexCount"], len(body["indices"])), dtype=np.float32)
-    for (i_feature, i_class) in enumerate(body["indices"]):
-        result[i_class, i_feature] = 1
-    return result.flatten()
-
-def _flatten_indices(body: dict[str, int | list[int]]) -> np.ndarray:
-    result = np.zeros((body["indexCount"],), dtype=np.float32)
-    for i in body["indices"]: result[i] = 1
-    return result
-
-def _flatten_real(body: list[int]) -> np.ndarray:
-    return np.array(body, dtype=np.float32)
+def decode_observation(obs: dict[str, Any]) -> Observation:
+    return Observation(
+        color=_float_indices_from_dict(obs["color"]),
+        shape=_float_indices_from_dict(obs["shape"]),
+        other=obs["other"],
+        )
 
 def _bool_indices(index_count: int, indices: list[int]) -> np.ndarray:
     result = np.zeros((index_count,), dtype=np.bool)
     for i in indices: result[i] = True
+    return result
+
+def _float_indices_from_dict(one_hot: dict[str, int | list[list[int]]]) -> np.ndarray:
+    return _float_indices(one_hot["indexCount"], one_hot["indices"])
+
+def _float_indices(index_count: int, indices: list[list[int]]) -> np.ndarray:
+    indices = np.array(indices, dtype=np.int64)
+    result = np.zeros((index_count,) + indices.shape, dtype=np.float32)
+    x, y = np.indices(indices.shape)
+    result[indices, x, y] = 1
     return result
