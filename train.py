@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 
 from dr_mario_env import DrMarioEnv, DrMarioCnnPolicy
 from sb3_contrib import MaskablePPO
@@ -47,6 +48,13 @@ def main() -> None:
     finally:
         try: model.save(args.output)
         finally: env.close()
+
+    # When looking at this we'll be doing quick test runs, and don't really
+    # care on longer runs. The distinction between those is frequently whether
+    # I hit ^C or not -- I'm much more likely to hit ^C on a long run. So this
+    # runs only if I don't hit that, and therefore we're on a short run.
+    for nm, param in model.policy.named_parameters():
+        print(nm, (x.grad*x.grad).sum()/math.prod(x.grad.shape))
 
 
 if __name__ == "__main__":
