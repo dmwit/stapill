@@ -41,15 +41,15 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
 
         if reward_weights is not None: self.reward_weights = reward_weights
         else: self.reward_weights = {
-            "match/horz": 1.7,
-            "match/vert": 1,
-            "invalid": -10,
-            "chasm": -0.1/16,
-            "frames": -0.01/100,
-            "viruses": 10_000,
-            "halves": 100,
-            "win": 1_000_000,
-            "lose": 0,
+            "match/horz": 0.00017,
+            "match/vert": 0.0001,
+            "invalid": -1,
+            "chasm": -0.0005/16,
+            "frames": -0.0005/100,
+            "halves": 0.001,
+            "viruses": 0.1,
+            "win": 1,
+            "lose": -0.01,
             }
 
     def _get_simulator(self) -> SimulatorClient:
