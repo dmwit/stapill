@@ -22,6 +22,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         simulator_command: Sequence[str] | None = None,
         level_distribution = [],
         reward_weights: dict[str, float] | None = None,
+        reward_max: list[tuple[dict[str, float], dict[str, float]]] | None = None,
         max_steps: int = 512,
         render_mode: str | None = None,
     ) -> None:
@@ -39,10 +40,11 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         self._steps = 0
         self._last_response: SimulatorReply | None = None
 
+        # wanna write self.rw = rw or {...}
+        # but what if the user wants there to be 0 rewards from this term and
+        # supplies rw = {}?
         if reward_weights is not None: self.reward_weights = reward_weights
         else: self.reward_weights = {
-            "match/horz": 0.00017,
-            "match/vert": 0.0001,
             "invalid": -1,
             "chasm": -0.0005/16,
             "frames": -0.0005/100,
@@ -51,6 +53,12 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             "win": 1,
             "lose": -0.01,
             }
+
+        if reward_max is not None: self.reward_max = reward_max
+        else: self.reward_max = [
+            ({"match/bl/horz": 0.00017}, {"match/bl/vert": 0.0001}),
+            ({"match/other/horz": 0.00017}, {"match/other/vert": 0.0001}),
+            ]
 
     def _get_simulator(self) -> SimulatorClient:
         if self._simulator is None:
@@ -136,8 +144,13 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         ys = _coordinate_plane(board_shape, 1)
         return np.concatenate([observation.color, observation.shape, other, xs, ys])
 
+    def _reward_for_dict(self, weights):
+        return sum(self._last_response.reward[k] * w for k, w in weights.items())
+
     def reward(self):
-        return sum(self._last_response.reward[k] * w for k, w in self.reward_weights.items())
+        linear_term = self._reward_for_dict(self.reward_weights)
+        max_term = sum(max(self._reward_for_dict(d1), self._reward_for_dict(d2)) for d1, d2 in self.reward_max)
+        return linear_term + max_term
 
 def _coordinate_plane(board_shape, axis):
     result_shape = [1 for _ in board_shape]

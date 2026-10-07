@@ -27,6 +27,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import qualified Data.Map as M
 import Data.Text (Text)
+import Data.Traversable (for)
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Data.Word (Word32)
@@ -157,7 +158,7 @@ newSimState seed level = do
   coarseSpeed <- ([Med, Hi]!!) <$> uniformRM (0, 1) gameRNG
 
   other <- newIORef ImmutableState
-    { immViruses = max 4 . min 84 $ level * 4
+    { immViruses = max 4 . min 84 $ (level + 1) * 4
     , immPillsUsed = 0
     , immFrame = firstFrame
     , immCoarseSpeed = coarseSpeed
@@ -229,20 +230,22 @@ validateAction sim mp = do
 
 actionReward :: SimState -> Pill -> Pill -> IO (HashMap Text Double)
 actionReward sim reqPill pill = do
-  horzReward <- sumFor placements \(pos, cell) ->
-    sumFor [0..7] \x' -> do
+  [blHorz, otherHorz] <- for placements \(pos, cell) ->
+    sum <$> for [0..7] \x' -> do
       nearbyCell <- mget (simBoard sim) pos { x = x' }
       pure $ if (nearbyCell >>= color) == color cell then 0.5 ^^ abs (x' - x pos) else 0
-  vertReward <- sumFor placements \(pos, cell) ->
-    sumFor [0..15] \y' -> do
+  [blVert, otherVert] <- for placements \(pos, cell) ->
+    sum <$> for [0..15] \y' -> do
       nearbyCell <- mget (simBoard sim) pos { y = y' }
       pure $ if (nearbyCell >>= color) == color cell then 0.5 ^^ abs (y' - y pos) else 0
   chasm <- case orientation (content pill) of
     Vertical -> pure 0
-    Horizontal -> sumFor placements \(pos, _) -> countEmpties (simBoard sim) (unsafeMove down pos)
+    Horizontal -> sum <$> for placements \(pos, _) -> countEmpties (simBoard sim) (unsafeMove down pos)
   pure $ HM.fromList
-    [ ("match/horz", horzReward)
-    , ("match/vert", vertReward)
+    [ ("match/bl/horz", blHorz)
+    , ("match/bl/vert", blVert)
+    , ("match/other/horz", otherHorz)
+    , ("match/other/vert", otherVert)
     , ("invalid", true1 (reqPill /= pill))
     , ("chasm", fromIntegral chasm)
     ]
@@ -251,7 +254,6 @@ actionReward sim reqPill pill = do
     [ (bottomLeftPosition pill, bottomLeftCell (content pill))
     , (otherPosition pill, otherCell (content pill))
     ]
-  sumFor xs f = sum <$> traverse f xs
 
 outcomeReward :: SimStepResults -> HashMap Text Double
 outcomeReward result = HM.fromList
