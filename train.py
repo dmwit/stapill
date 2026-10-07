@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from dr_mario_env import DrMarioEnv
-from dr_mario_env.policy import DrMarioCnnPolicy
+from dr_mario_env import DrMarioEnv, DrMarioCnnPolicy
 from sb3_contrib import MaskablePPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
