@@ -55,7 +55,7 @@ term, not frame-based discounting.
 - [x] Implement `render()` or a board-debugging representation.
 - [x] Add `close()` and clean shutdown behavior.
 - [x] Add a minimal training script using `MaskablePPO`.
-- [ ] Add vectorized environment support after the single environment works.
+- [x] Add vectorized environment support after the single environment works.
 
 ## Verification
 
@@ -73,10 +73,10 @@ term, not frame-based discounting.
 - [x] Add variable virus levels and speed progression.
 - [ ] Investigate exact frame-based discounting if action-based discounting is insufficient.
 - [ ] Add two-player mechanics, garbage, and self-play.
-- [ ] Compare architecture 1 with deeper pill conditioning and color-pair-specific output heads.
-- [ ] Color-permutation training augmentation.
-- [ ] Add a convolutional net in parallel to the existing net architecture.
+- [x] Compare architecture 1 with deeper pill conditioning and color-pair-specific output heads.
+- [x] Color-permutation training augmentation.
+- [x] Add a convolutional net in parallel to the existing net architecture.
 - [ ] Experiment with different reward weightings.
 - [x] Color invariance: make observations be lookahead-relative, with a bit for double pills.
-- [ ] CNN-ify the policy/value network.
+- [x] CNN-ify the policy/value network.
 - [ ] Maybe pathfinding is a speed bottleneck. We could schedule it at action time, but only wait for it to finish at action-mask query time. Needs benchmark.
