@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import wandb
 
 from dr_mario_env import DrMarioEnv, DrMarioCnnPolicy
 from sb3_contrib import MaskablePPO
@@ -46,10 +47,26 @@ def main() -> None:
     else: model = MaskablePPO.load(args.input, env, custom_objects={'learning_rate':3e-6})
     model.ent_coef = 1e-2
 
+    run = wandb.init(
+        project='stapill',
+        id=f'depth-{args.cnn_depth}-channel-count-{args.cnn_channels}',
+        sync_tensorboard=True,
+        resume='allow',
+        config=dict(
+            reward_weights=env.get_attr('reward_weights', 0)[0],
+            reward_max=env.get_attr('reward_max', 0)[0],
+            ent_coef=model.ent_coef,
+            learning_rate=model.learning_rate,
+            ),
+        )
+    model.tensorboard_log = "wandb/tensorboard"
+
     try: model.learn(total_timesteps=args.timesteps)
     finally:
         try: model.save(args.output)
-        finally: env.close()
+        finally:
+            env.close()
+            run.finish()
 
     # When looking at this we'll be doing quick test runs, and don't really
     # care on longer runs. The distinction between those is frequently whether

@@ -11,6 +11,8 @@ dependencies = [
   "gymnasium>=0.29",
   "stable-baselines3>=2.0",
   "sb3-contrib>=2.0",
+  "tensorboard>=2.21",
+  "wandb>=0.30",
 ]
 
 [tool.setuptools.packages.find]

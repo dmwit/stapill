@@ -21,6 +21,7 @@ htmlcov/
 tensorboard/
 runs/
 checkpoints/
+wandb/
 *.zip
 *.pt
 *.pth
