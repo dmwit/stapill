@@ -46,7 +46,8 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         if reward_weights is not None: self.reward_weights = reward_weights
         else: self.reward_weights = {
             "invalid": -1,
-            "chasm": -0.0005/16,
+            # maybe later we'll try to teach it to avoid this. for now we don't want it to learn to never place horizontal pills.
+            # "chasm": -0.0005/16,
             "frames": -0.0005/100,
             "halves": 0.001,
             "viruses": 0.1,

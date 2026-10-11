@@ -35,6 +35,7 @@ def main() -> None:
             DrMarioCnnPolicy,
             env,
             verbose=1,
+            learning_rate=3e-6,
             policy_kwargs=dict(
                 features_extractor_kwargs=dict(
                     channels=args.cnn_channels,
@@ -42,7 +43,8 @@ def main() -> None:
                 ),
             ),
         )
-    else: model = MaskablePPO.load(args.input, env)
+    else: model = MaskablePPO.load(args.input, env, custom_objects={'learning_rate':3e-6})
+    model.ent_coef = 1e-2
 
     try: model.learn(total_timesteps=args.timesteps)
     finally:
