@@ -5,6 +5,21 @@ synopsis:           JSON-line simulator for the maryodel Dr. Mario model
 license:            BSD-3-Clause
 build-type:         Simple
 
+library
+  exposed-modules:
+      Stapill.Box
+      Stapill.PuzzleGeneration
+  hs-source-dirs:    src
+  default-language:  Haskell2010
+  ghc-options:       -Wall
+  build-depends:
+      base >= 4.11 && < 5
+    , containers >= 0.5 && < 0.7
+    , data-default >=0.7 && <0.8
+    , maryodel
+    , mwc-random >= 0.15 && < 0.16
+    , transformers >= 0.5 && < 0.7
+
 executable stapill-hiss
   main-is:             Main.hs
   other-modules:       JSONTH
@@ -13,7 +28,7 @@ executable stapill-hiss
   ghc-options:         -Wall -O2
   build-depends:
       aeson >= 2.0 && < 2.3
-    , base >= 4.10 && < 4.17
+    , base >= 4.11 && < 4.17
     , bytestring >= 0.10 && < 0.12
     , containers >= 0.5 && < 0.7
     , cryptohash-sha256 >= 0.11 && < 0.12
