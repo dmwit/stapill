@@ -80,3 +80,18 @@ term, not frame-based discounting.
 - [x] Color invariance: make observations be lookahead-relative, with a bit for double pills.
 - [x] CNN-ify the policy/value network.
 - [ ] Maybe pathfinding is a speed bottleneck. We could schedule it at action time, but only wait for it to finish at action-mask query time. Needs benchmark.
+
+## Puzzle templates
+
+- [ ] clearing from underneath, building up to a clear (don't forget building up to an H clear)
+- [ ] choosing to complete the level; esp. over making extra alignment rewards at the cost of fall time
+- [ ] build up under garbage that will fall later
+- [ ] central clears, desandwiching (both H and V)
+- [ ] delayed gratification: don't make a tempting clear that screws up a combo
+- [ ] clear horizontally near the top of the board to help finish v clears on the edges that keep the playfield height even
+- [ ] generally just prioritize the edges
+- [ ] clear high viruses last? similarly waiting on doubles for no-drop clears high up
+- [ ] maybe some board health ones? eg dependency chains, color diversity, endgame patience about not blocking important low positions
+- [ ] preserve the double-pill opportunity
+- [ ] maybe combo training???
+- [ ] don't clear platforms you need for H clears
