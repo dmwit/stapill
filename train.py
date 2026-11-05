@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--output", default="dr_mario_maskable_ppo")
     parser.add_argument("--input")
     parser.add_argument("--disable-cudnn", default=True)
+    parser.add_argument("--learning-rate", type=float, default=3e-6)
     args = parser.parse_args()
 
     if args.disable_cudnn:
@@ -36,7 +37,7 @@ def main() -> None:
             DrMarioCnnPolicy,
             env,
             verbose=1,
-            learning_rate=3e-6,
+            learning_rate=args.learning_rate,
             policy_kwargs=dict(
                 features_extractor_kwargs=dict(
                     channels=args.cnn_channels,
@@ -44,7 +45,7 @@ def main() -> None:
                 ),
             ),
         )
-    else: model = MaskablePPO.load(args.input, env, custom_objects={'learning_rate':3e-6})
+    else: model = MaskablePPO.load(args.input, env, custom_objects={'learning_rate':args.learning_rate})
     model.ent_coef = 1e-2
 
     run = wandb.init(
