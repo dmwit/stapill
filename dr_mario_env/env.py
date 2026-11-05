@@ -7,6 +7,8 @@ import numpy as np
 
 from typing import Any, Sequence
 from gymnasium import spaces
+from .actions import ACTION_COUNT
+from .observation import OBSERVATION_SHAPE, encode_simulator_reply
 from .simulator import SimulatorClient, SimulatorReply
 
 
@@ -14,8 +16,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
     """One placement decision per environment step."""
 
     metadata = {"render_modes": ["ansi"]}
-    # 14 = 4 colors + 5 shapes + 3 others + 2 positions
-    OBSERVATION_SHAPE = (14, 8, 16)
+    OBSERVATION_SHAPE = OBSERVATION_SHAPE
 
     def __init__(
         self,
@@ -29,7 +30,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         super().__init__()
         self.max_steps = max_steps
         self.render_mode = render_mode
-        self.action_space = spaces.Discrete(8 * 16 * 4) # columns x rows x rotations
+        self.action_space = spaces.Discrete(ACTION_COUNT) # columns x rows x rotations
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=self.OBSERVATION_SHAPE, dtype=np.float32
         )
@@ -131,18 +132,7 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
             self._simulator = None
 
     def observe(self):
-        observation = self._last_response.observation
-        board_shape = observation.color.shape[1:]
-        other = np.broadcast_to(
-            np.array(
-                [[[obs]] for _, obs in sorted(observation.other.items())],
-                dtype=np.float32,
-                ),
-            (len(observation.other),) + board_shape,
-            )
-        xs = _coordinate_plane(board_shape, 0)
-        ys = _coordinate_plane(board_shape, 1)
-        return np.concatenate([observation.color, observation.shape, other, xs, ys])
+        return encode_simulator_reply(self._last_response)
 
     def _reward_for_dict(self, weights):
         return sum(self._last_response.reward[k] * w for k, w in weights.items())
@@ -151,16 +141,3 @@ class DrMarioEnv(gym.Env[np.ndarray, np.int64]):
         linear_term = self._reward_for_dict(self.reward_weights)
         max_term = sum(max(self._reward_for_dict(d1), self._reward_for_dict(d2)) for d1, d2 in self.reward_max)
         return linear_term + max_term
-
-def _coordinate_plane(board_shape, axis):
-    result_shape = [1 for _ in board_shape]
-    result_shape[axis] = board_shape[axis]
-    result_shape = [1] + result_shape
-
-    return np.broadcast_to(
-        np.reshape(
-            np.linspace(0, 1, board_shape[axis], endpoint=False, dtype=np.float32),
-            result_shape,
-            ),
-        (1,) + board_shape,
-        )

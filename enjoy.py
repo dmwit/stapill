@@ -1,7 +1,15 @@
 import argparse
+import sys
 import time
 
-from dr_mario_env import DrMarioEnv
+from dr_mario_env import (
+    DrMarioEnv,
+    Dasyuridia,
+    encode_event,
+    encode_none,
+    action_to_placement,
+    placement_mask,
+)
 from sb3_contrib import MaskablePPO
 
 def pptime(frames):
@@ -23,18 +31,25 @@ def pptime(frames):
 
     return result
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--level-distribution", type=int, nargs='+', default=[0])
-    parser.add_argument("--fps", type=float, default=1)
-    parser.add_argument("--input", default="dr_mario_maskable_ppo")
-    parser.add_argument("--disable-cudnn", default=True)
-    args = parser.parse_args()
+def run_dasyuridia(model, command_args):
+    """Run a policy against dasyuridia."""
 
-    if args.disable_cudnn:
-        import torch
-        torch.backends.cudnn.enabled = False
+    # make sure the model is fully loaded
+    model.predict(encode_none())
 
+    with Dasyuridia(["dasyuridia-hi", *command_args]) as dasyuridia:
+        # Result simulation is unnecessary for selecting placements.
+        dasyuridia.include_results(False)
+        for event in dasyuridia:
+            placements = tuple(item.placement for item in event.reachable)
+            action_masks = placement_mask(placements)
+            if not action_masks.any(): continue
+            observation = encode_event(event)
+            action, _ = model.predict(observation, action_masks=action_masks)
+            placement = action_to_placement(int(action))
+            dasyuridia.place(event.tag, placement)
+
+def run_console(args):
     env = DrMarioEnv(level_distribution=args.level_distribution, render_mode="human")
     model = MaskablePPO.load(args.input, env)
     terminated = True
@@ -71,3 +86,26 @@ if __name__ == "__main__":
         print('\n'*3)
 
         time.sleep(1/args.fps)
+
+
+if __name__ == "__main__":
+    raw_args = sys.argv[1:]
+    separator = raw_args.index("--") if "--" in raw_args else len(raw_args)
+    passthrough_args = raw_args[separator + 1 :]
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dasyuridia", action="store_true")
+    parser.add_argument("--level-distribution", type=int, nargs='+', default=[0])
+    parser.add_argument("--fps", type=float, default=1)
+    parser.add_argument("--input", default="dr_mario_maskable_ppo")
+    parser.add_argument("--disable-cudnn", default=True)
+    args = parser.parse_args(raw_args[:separator])
+
+    if args.disable_cudnn:
+        import torch
+        torch.backends.cudnn.enabled = False
+
+    if args.dasyuridia:
+        run_dasyuridia(MaskablePPO.load(args.input), passthrough_args)
+    else:
+        run_console(args)

@@ -219,8 +219,8 @@ class PlacementInfo:
 class Lookahead:
     """The colors of the next pill, from left/bottom-left to right/other."""
 
-    left_color: Color
-    right_color: Color
+    left: Color
+    right: Color
 
     @classmethod
     def from_json(cls, source: str | bytes | bytearray | Any) -> Lookahead:
@@ -237,7 +237,7 @@ class Lookahead:
             raise ValueError(f"invalid lookahead {value!r}") from error
 
     def to_json_value(self) -> str:
-        return self.left_color.value + self.right_color.value
+        return self.left.value + self.right.value
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,7 +355,6 @@ class Dasyuridia(Iterator[Event]):
             list(command) if command is not None else ["dasyuridia-hi"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
             text=True,
             bufsize=1,
             cwd=cwd,
