@@ -8,9 +8,9 @@ import wandb
 
 from dr_mario_env import DrMarioEnv, DrMarioCnnPolicy
 from sb3_contrib import MaskablePPO
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -22,6 +22,8 @@ def main() -> None:
     parser.add_argument("--cnn-depth", type=int, default=8,
                         help="Number of padded 3x3 conv layers in the shared trunk")
     parser.add_argument("--output", default="dr_mario_maskable_ppo")
+    parser.add_argument("--checkpoint-freq", type=int, default=163_840,
+                        help="Save a checkpoint every N environment steps")
     parser.add_argument("--input")
     parser.add_argument("--disable-cudnn", default=True)
     parser.add_argument("--learning-rate", type=float, default=3e-6)
@@ -47,6 +49,7 @@ def main() -> None:
         )
     else: model = MaskablePPO.load(args.input, env, custom_objects={'learning_rate':args.learning_rate})
     model.ent_coef = 1e-2
+    save_callback = SaveCallback(args.output, args.checkpoint_freq//env.num_envs)
 
     run = wandb.init(
         project='stapill',
@@ -62,7 +65,7 @@ def main() -> None:
         )
     model.tensorboard_log = "wandb/tensorboard"
 
-    try: model.learn(total_timesteps=args.timesteps)
+    try: model.learn(total_timesteps=args.timesteps, callback=save_callback)
     finally:
         try: model.save(args.output)
         finally:
@@ -76,6 +79,18 @@ def main() -> None:
     for nm, param in model.policy.named_parameters():
         print(nm, (x.grad*x.grad).sum()/math.prod(x.grad.shape))
 
+class SaveCallback(BaseCallback):
+    def __init__(self, filename, freq, verbose = 0):
+        super().__init__(verbose)
+        self.filename = filename
+        self.freq = max(1, int(freq))
+
+    def _on_step(self) -> bool:
+        if self.n_calls % self.freq == 0:
+            self.model.save(self.filename)
+            if self.verbose > 0:
+                print('model saved')
+        return True
 
 if __name__ == "__main__":
     main()
